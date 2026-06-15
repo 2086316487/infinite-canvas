@@ -15,10 +15,11 @@ export type ChatCompletionMessage = {
 };
 
 type ImageApiResponse = {
-    data?: Array<Record<string, unknown>>;
+    data?: unknown;
     error?: { message?: string };
     code?: number;
     msg?: string;
+    [key: string]: unknown;
 };
 
 const QUALITY_BASE: Record<string, number> = {
@@ -109,31 +110,57 @@ function resolveRequestSize(quality: string | undefined, size: string) {
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
-function resolveImageDataUrl(item: Record<string, unknown>) {
-    if (typeof item.b64_json === "string" && item.b64_json) {
-        return `data:image/png;base64,${item.b64_json}`;
-    }
-    if (typeof item.url === "string" && item.url) {
-        return item.url;
+function normalizeImageValue(value: unknown) {
+    if (typeof value !== "string") return null;
+    const text = value.trim();
+    if (!text) return null;
+    if (/^(https?:|blob:|data:image\/)/i.test(text)) return text;
+    if (/^[A-Za-z0-9+/=\r\n]+$/.test(text) && text.replace(/\s/g, "").length > 100) {
+        return `data:image/png;base64,${text.replace(/\s/g, "")}`;
     }
     return null;
 }
 
+function readImageUrlField(value: unknown) {
+    const direct = normalizeImageValue(value);
+    if (direct) return direct;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return normalizeImageValue((value as Record<string, unknown>).url);
+}
+
+function resolveImageDataUrls(value: unknown, depth = 0): string[] {
+    if (depth > 5 || value == null) return [];
+    const direct = normalizeImageValue(value);
+    if (direct) return [direct];
+    if (Array.isArray(value)) return value.flatMap((item) => resolveImageDataUrls(item, depth + 1));
+    if (typeof value !== "object") return [];
+
+    const item = value as Record<string, unknown>;
+    const directFields = [item.b64_json, item.url, item.image_url, item.imageUrl, item.image, item.base64, item.b64]
+        .map(readImageUrlField)
+        .filter((image): image is string => Boolean(image));
+    if (directFields.length) return directFields;
+
+    return ["data", "images", "image_urls", "imageUrls", "output", "outputs", "result", "results", "artifacts", "items", "content"].flatMap((key) =>
+        resolveImageDataUrls(item[key], depth + 1),
+    );
+}
+
 function parseImagePayload(payload: ImageApiResponse) {
+    const images = resolveImageDataUrls(payload.data ?? payload).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+
+    if (images.length > 0) {
+        return images;
+    }
+
+    if (payload.error?.message) {
+        throw new Error(payload.error.message);
+    }
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || "请求失败");
     }
-    const images =
-        payload.data
-            ?.map(resolveImageDataUrl)
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
 
-    if (images.length === 0) {
-        throw new Error("接口没有返回图片");
-    }
-
-    return images;
+    throw new Error("接口没有返回图片");
 }
 
 function readAxiosError(error: unknown, fallback: string) {

@@ -137,7 +137,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func
 	}
 
 	for key, values := range response.Header {
-		if strings.EqualFold(key, "Content-Length") {
+		if shouldSkipAIResponseHeader(key) {
 			continue
 		}
 		for _, value := range values {
@@ -151,6 +151,19 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func
 		return
 	}
 	log.Printf("AI proxy response copied: host=%s path=%s status=%d bytes=%d duration=%s", request.URL.Host, request.URL.Path, response.StatusCode, copied, time.Since(started).Round(time.Millisecond))
+}
+
+func shouldSkipAIResponseHeader(key string) bool {
+	lower := strings.ToLower(key)
+	if strings.HasPrefix(lower, "access-control-") {
+		return true
+	}
+	switch lower {
+	case "content-length", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
 }
 
 func readAIRequest(r *http.Request) ([]byte, string, string, error) {
