@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { buildRemoteApiUrl } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -169,7 +170,7 @@ function withSystemPrompt(config: AiConfig, prompt: string) {
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
+    return config.channelMode === "remote" ? buildRemoteApiUrl(`/api/v1${path}`) : buildApiUrl(config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
@@ -207,7 +208,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 n,
                 ...(quality ? { quality } : {}),
                 ...(requestSize ? { size: requestSize } : {}),
-                response_format: "b64_json",
+                response_format: "url",
                 output_format: IMAGE_OUTPUT_FORMAT,
             },
             {
@@ -231,7 +232,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, requestPrompt));
     formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
+    formData.set("response_format", "url");
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);
     if (quality) {
         formData.set("quality", quality);

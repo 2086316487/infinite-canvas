@@ -2,7 +2,9 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/basketikun/infinite-canvas/config"
 	"github.com/basketikun/infinite-canvas/handler"
 	"github.com/basketikun/infinite-canvas/middleware"
 	"github.com/gin-gonic/gin"
@@ -12,6 +14,7 @@ func New() *gin.Engine {
 	router := gin.Default()
 	router.RedirectTrailingSlash = false
 	_ = router.SetTrustedProxies(nil)
+	router.Use(corsMiddleware())
 	api := router.Group("/api")
 	api.GET("/health", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
@@ -80,4 +83,53 @@ func New() *gin.Engine {
 	router.NoRoute(middleware.NotFoundJSON)
 
 	return router
+}
+
+func corsMiddleware() gin.HandlerFunc {
+	allowedOrigins := parseAllowedOrigins(config.Cfg.CORSAllowedOrigins)
+	return func(c *gin.Context) {
+		origin := strings.TrimRight(c.GetHeader("Origin"), "/")
+		if origin != "" && isAllowedOrigin(allowedOrigins, origin) {
+			headers := c.Writer.Header()
+			headers.Set("Access-Control-Allow-Origin", origin)
+			headers.Add("Vary", "Origin")
+			headers.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			headers.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			headers.Set("Access-Control-Max-Age", "86400")
+		}
+
+		if c.Request.Method == http.MethodOptions {
+			if origin != "" && len(allowedOrigins) > 0 && !isAllowedOrigin(allowedOrigins, origin) {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}
+
+func parseAllowedOrigins(value string) map[string]struct{} {
+	origins := map[string]struct{}{}
+	for _, item := range strings.Split(value, ",") {
+		origin := strings.TrimRight(strings.TrimSpace(item), "/")
+		if origin == "" {
+			continue
+		}
+		origins[origin] = struct{}{}
+	}
+	return origins
+}
+
+func isAllowedOrigin(allowed map[string]struct{}, origin string) bool {
+	if len(allowed) == 0 {
+		return false
+	}
+	if _, ok := allowed["*"]; ok {
+		return true
+	}
+	_, ok := allowed[origin]
+	return ok
 }

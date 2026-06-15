@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/basketikun/infinite-canvas/service"
 )
@@ -81,7 +82,8 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	credits *= readAIRequestCount(body, contentType)
+	count := readAIRequestCount(body, contentType)
+	credits *= count
 	channel, err := service.SelectModelChannel(modelName)
 	if err != nil {
 		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
@@ -99,6 +101,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
+	log.Printf("AI proxy start: method=POST path=%s model=%s count=%d credits=%d upstream_host=%s upstream_path=%s", path, modelName, count, credits, request.URL.Host, request.URL.Path)
 	if err := service.ConsumeUserCredits(user.ID, modelName, credits, path); err != nil {
 		FailError(w, err)
 		return
@@ -111,9 +114,10 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 }
 
 func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func()) {
+	started := time.Now()
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)
+		log.Printf("AI proxy request failed: host=%s path=%s duration=%s err=%v", request.URL.Host, request.URL.Path, time.Since(started).Round(time.Millisecond), err)
 		if onFailure != nil {
 			onFailure()
 		}
@@ -124,7 +128,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func
 
 	if response.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		log.Printf("AI upstream error: url=%s status=%d", request.URL.String(), response.StatusCode)
+		log.Printf("AI upstream error: host=%s path=%s status=%d duration=%s", request.URL.Host, request.URL.Path, response.StatusCode, time.Since(started).Round(time.Millisecond))
 		if onFailure != nil {
 			onFailure()
 		}
@@ -141,7 +145,12 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func
 		}
 	}
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	copied, copyErr := io.Copy(w, response.Body)
+	if copyErr != nil {
+		log.Printf("AI proxy response copy failed: host=%s path=%s status=%d bytes=%d duration=%s err=%v", request.URL.Host, request.URL.Path, response.StatusCode, copied, time.Since(started).Round(time.Millisecond), copyErr)
+		return
+	}
+	log.Printf("AI proxy response copied: host=%s path=%s status=%d bytes=%d duration=%s", request.URL.Host, request.URL.Path, response.StatusCode, copied, time.Since(started).Round(time.Millisecond))
 }
 
 func readAIRequest(r *http.Request) ([]byte, string, string, error) {

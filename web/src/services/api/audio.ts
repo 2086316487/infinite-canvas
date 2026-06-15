@@ -2,11 +2,12 @@ import axios from "axios";
 
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { buildRemoteApiUrl } from "@/services/api/request";
 import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
+    return config.channelMode === "remote" ? buildRemoteApiUrl(`/api/v1${path}`) : buildApiUrl(config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig) {

@@ -8,6 +8,17 @@ type ApiResponse<T> = {
     msg: string;
 };
 
+export function apiBaseUrl() {
+    return (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
+}
+
+export function buildRemoteApiUrl(path: string) {
+    const value = path.trim();
+    if (/^https?:\/\//i.test(value)) return value;
+    const base = apiBaseUrl();
+    return base ? `${base}${value.startsWith("/") ? value : `/${value}`}` : value;
+}
+
 export function compactApiParams(params: ApiParams) {
     return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value !== undefined && (!Array.isArray(value) || value.length > 0))) as ApiParams;
 }
@@ -55,7 +66,7 @@ async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DE
     let response;
     try {
         response = await axios.request<ApiResponse<T>>({
-            url: config.url,
+            url: buildRemoteApiUrl(config.url),
             method: config.method,
             params: config.params,
             paramsSerializer: { serialize: (params) => serializeApiParams(params as ApiParams).toString() },
