@@ -33,10 +33,6 @@ export function serializeApiParams(params?: ApiParams) {
     return queryParams;
 }
 
-export function buildRemoteApiUrl(path: string) {
-    return path.startsWith("/") ? path : `/${path}`;
-}
-
 export async function apiGet<T>(url: string, params?: ApiParams, token?: string) {
     return apiRequest<T>({
         url,
