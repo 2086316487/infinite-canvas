@@ -24,6 +24,7 @@ description: 当前后端主要数据表与字段说明
 - `prompts`
 - `assets`
 - `settings`
+- `image_tasks`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -198,3 +199,31 @@ description: 当前后端主要数据表与字段说明
 | `admin_adjust` | 后台手动调整 |
 | `ai_consume` | 调用后端模型接口消费 |
 | `ai_refund` | 后端模型接口调用失败返还 |
+
+### image_tasks
+
+图片异步任务表。当前用于远程部署模式下的文生图、图生图任务创建、轮询、失败重试和服务重启后的任务恢复。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 主键 |
+| `user_id` | string | 任务所属用户 ID，索引 |
+| `mode` | string | 任务模式：`generation`、`edit` |
+| `model` | string | 本次调用的模型名 |
+| `count` | number | 预期生成数量 |
+| `status` | string | 任务状态：`pending`、`running`、`succeeded`、`failed`、`cancelled` |
+| `credits` | number | 本次任务预扣的算力点 |
+| `error_message` | string | 失败错误信息 |
+| `refunded` | bool | 失败后是否已返还算力点 |
+| `content_type` | string | 原始请求内容类型 |
+| `request_body` | bytes | 原始请求体，用于恢复执行 |
+| `upstream_path` | string | 上游请求路径 |
+| `outputs` | json | 结果列表，当前默认保存站内稳定图片 URL、MIME 类型和修订后的提示词 |
+| `locked_by` | string | 当前领取任务的 worker 标识 |
+| `locked_until` | string | 当前租约过期时间，超时后其他 worker 可重新领取 |
+| `attempts` | number | 已执行尝试次数 |
+| `next_run_at` | string | 下次允许重试的时间 |
+| `started_at` | string | 开始执行时间 |
+| `finished_at` | string | 执行完成时间 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |

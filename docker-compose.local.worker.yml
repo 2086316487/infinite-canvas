@@ -1,0 +1,18 @@
+services:
+  app:
+    environment:
+      APP_ROLE: web
+
+  worker:
+    image: infinite-canvas:local
+    container_name: infinite-canvas-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: worker
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

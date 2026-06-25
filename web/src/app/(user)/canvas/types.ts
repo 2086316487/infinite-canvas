@@ -52,6 +52,8 @@ export type CanvasNodeMetadata = {
     batchUsesReferenceImages?: boolean;
     primaryImageId?: string;
     imageBatchExpanded?: boolean;
+    imageTaskId?: string;
+    imageTaskMode?: CanvasImageGenerationType;
     storageKey?: string;
     mimeType?: string;
     bytes?: number;
@@ -90,6 +92,12 @@ export type CanvasAssistantImage = {
     prompt: string;
 };
 
+export type CanvasAssistantImageTask = {
+    id: string;
+    mode: CanvasImageGenerationType;
+    model: string;
+};
+
 export type CanvasAssistantMessage = {
     id: string;
     role: "user" | "assistant";
@@ -98,6 +106,9 @@ export type CanvasAssistantMessage = {
     isLoading?: boolean;
     references?: CanvasAssistantReference[];
     images?: CanvasAssistantImage[];
+    imagePrompt?: string;
+    imageTasks?: CanvasAssistantImageTask[];
+    imageTaskCreateFailCount?: number;
 };
 
 export type CanvasAssistantSession = {

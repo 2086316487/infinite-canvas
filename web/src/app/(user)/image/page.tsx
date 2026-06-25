@@ -16,7 +16,7 @@ import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { requestEdit, requestGeneration } from "@/services/api/image";
+import { createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, type ImageGenerationTask } from "@/services/api/image";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { ReferenceImage } from "@/types/image";
@@ -54,14 +54,17 @@ type GenerationLog = {
     imageCount: number;
     size: string;
     quality: string;
-    status: "成功" | "失败";
+    status: "生成中" | "成功" | "失败";
     images: GeneratedImage[];
     thumbnails: string[];
+    tasks?: ImageGenerationTask[];
+    error?: string;
 };
 
 type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count">;
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+type ImageRequestSnapshot = { text: string; config: AiConfig; references: ReferenceImage[] };
 
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
 const RESULT_ACTION_BUTTON_CLASS = "min-w-0 px-1.5 [&_.ant-btn-icon]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate";
@@ -70,6 +73,10 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function ImagePage() {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const activeLogIdsRef = useRef<Set<string>>(new Set());
+    const deletedLogIdsRef = useRef<Set<string>>(new Set());
+    const previewLogIdRef = useRef<string | null>(null);
+    const activeResultLogIdRef = useRef<string | null>(null);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -104,6 +111,10 @@ export default function ImagePage() {
     useEffect(() => {
         void refreshLogs();
     }, []);
+
+    useEffect(() => {
+        previewLogIdRef.current = previewLog?.id || null;
+    }, [previewLog]);
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
@@ -159,6 +170,11 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
+        if (snapshot.config.channelMode === "remote") {
+            await createRemoteGenerationLog(snapshot, batchStartedAt);
+            return;
+        }
+
         const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
 
         const result = await Promise.allSettled(tasks);
@@ -190,6 +206,58 @@ export default function ImagePage() {
             successCount ? message.success("图片已生成") : message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
         } finally {
             setRunning(false);
+        }
+    };
+
+    const createRemoteGenerationLog = async (snapshot: ImageRequestSnapshot, batchStartedAt: number, taskCount = generationCount) => {
+        try {
+            const settledTasks = await Promise.allSettled(
+                Array.from({ length: taskCount }, () => (snapshot.references.length ? createImageEditTask(snapshot.config, snapshot.text, snapshot.references) : createImageGenerationTask(snapshot.config, snapshot.text))),
+            );
+            const tasks = settledTasks.filter((item): item is PromiseFulfilledResult<ImageGenerationTask> => item.status === "fulfilled").map((item) => item.value);
+            const failedTask = settledTasks.find((item): item is PromiseRejectedResult => item.status === "rejected");
+            const createFailCount = settledTasks.length - tasks.length;
+            if (!tasks.length) throw (failedTask?.reason instanceof Error ? failedTask.reason : new Error("生成失败"));
+            const log = buildLog({
+                prompt: snapshot.text,
+                model,
+                config: { ...snapshot.config, count: String(taskCount) },
+                references: snapshot.references,
+                durationMs: 0,
+                successCount: 0,
+                failCount: createFailCount,
+                status: "生成中",
+                images: [],
+                tasks,
+                error: failedTask?.reason instanceof Error ? failedTask.reason.message : undefined,
+            });
+            activeResultLogIdRef.current = log.id;
+            previewLogIdRef.current = log.id;
+            setPreviewLog(log);
+            await saveLog(log);
+            if (createFailCount) message.warning(`部分任务创建失败，已继续等待 ${tasks.length} 个任务`);
+            void pollGenerationLog(log, snapshot.config, { background: false });
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "生成失败";
+            setResults(Array.from({ length: taskCount }, (_, index) => ({ id: `failed-${index}`, status: "failed", error: errorMessage })));
+            await saveLog(
+                buildLog({
+                    prompt: snapshot.text,
+                    model,
+                    config: { ...snapshot.config, count: String(taskCount) },
+                    references: snapshot.references,
+                    durationMs: performance.now() - batchStartedAt,
+                    successCount: 0,
+                    failCount: taskCount,
+                    status: "失败",
+                    images: [],
+                    error: errorMessage,
+                }),
+            );
+            message.error(errorMessage);
+            setRunning(false);
+            setStartedAt(0);
+            activeResultLogIdRef.current = null;
         }
     };
 
@@ -237,26 +305,155 @@ export default function ImagePage() {
         setStartedAt(0);
         setSelectedLogIds([]);
         setPreviewLog(null);
+        previewLogIdRef.current = null;
+        activeResultLogIdRef.current = null;
+        setRunning(false);
     };
 
     const deleteSelectedLogs = () => {
+        selectedLogIds.forEach((id) => deletedLogIdsRef.current.add(id));
         const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
         void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
+            previewLogIdRef.current = null;
+            activeResultLogIdRef.current = null;
+            setRunning(false);
+            setStartedAt(0);
         }
         setSelectedLogIds([]);
         setDeleteConfirmOpen(false);
     };
 
-    const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+    const saveLog = async (log: GenerationLog) => {
+        if (deletedLogIdsRef.current.has(log.id)) return;
+        await logStore.setItem(log.id, serializeLog(log));
+        await refreshLogs();
     };
 
-    const refreshLogs = async () => setLogs(await readStoredLogs());
+    const refreshLogs = async () => {
+        const nextLogs = await readStoredLogs();
+        setLogs(nextLogs);
+        resumePendingLogs(nextLogs);
+        return nextLogs;
+    };
+
+    const resumePendingLogs = (items: GenerationLog[]) => {
+        for (const log of items) {
+            if (deletedLogIdsRef.current.has(log.id)) continue;
+            if (log.status === "生成中" && log.tasks?.length) void pollGenerationLog(log, undefined, { background: true });
+        }
+    };
+
+    const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig, options?: { background?: boolean }) => {
+        const isBackground = Boolean(options?.background);
+        if (deletedLogIdsRef.current.has(log.id)) return;
+        if (!log.tasks?.length) return;
+        if (!isBackground) {
+            activeResultLogIdRef.current = log.id;
+            setRunning(true);
+            setStartedAt(performance.now() - Math.max(0, Date.now() - log.createdAt));
+            setResults(Array.from({ length: log.tasks.length || log.imageCount || 1 }, () => ({ id: nanoid(), status: "pending" })));
+        }
+        if (activeLogIdsRef.current.has(log.id)) return;
+        activeLogIdsRef.current.add(log.id);
+        const taskConfig = buildImageConfig({ ...effectiveConfig, ...log.config }, log.model);
+        const shouldBindLogResults = () => !deletedLogIdsRef.current.has(log.id) && (activeResultLogIdRef.current === log.id || previewLogIdRef.current === log.id);
+        try {
+            const settled = await Promise.allSettled(
+                log.tasks.map((task, index) => pollImageTaskSlot(configOverride || taskConfig, task, index, shouldBindLogResults)),
+            );
+            const successImages = settled.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
+            const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+            if (deletedLogIdsRef.current.has(log.id)) return;
+            const logImages = await Promise.all(successImages.map(storeGeneratedImageForLog));
+            const successCount = logImages.length;
+            const failCount = Math.max(log.failCount || 0, (log.imageCount || log.tasks?.length || successCount) - successCount);
+            const nextLog: GenerationLog = {
+                ...log,
+                status: successCount ? "成功" : "失败",
+                durationMs: Date.now() - log.createdAt,
+                successCount,
+                failCount,
+                images: logImages,
+                thumbnails: logImages.map((image) => image.dataUrl).filter(Boolean),
+                tasks: undefined,
+                error: failed?.reason instanceof Error ? failed.reason.message : successCount ? log.error : "生成失败",
+            };
+            if (deletedLogIdsRef.current.has(log.id)) return;
+            await saveLog(nextLog);
+            const shouldSurface = shouldBindLogResults();
+            if (previewLogIdRef.current === log.id) {
+                setPreviewLog(nextLog);
+            }
+            if (shouldSurface && successCount) {
+                setResults(logImages.map((image) => ({ id: image.id, status: "success", image })));
+                if (failCount) message.warning(`已生成 ${successCount} 张，失败 ${failCount} 张`);
+                else message.success("图片已生成");
+            } else if (shouldSurface) {
+                setResults([{ id: log.id, status: "failed", error: failed?.reason instanceof Error ? failed.reason.message : "生成失败" }]);
+                message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
+            }
+        } finally {
+            activeLogIdsRef.current.delete(log.id);
+            if (activeResultLogIdRef.current === log.id) {
+                activeResultLogIdRef.current = null;
+                setRunning(false);
+                setStartedAt(0);
+            }
+        }
+    };
+
+    const pollImageTaskSlot = async (taskConfig: AiConfig, task: ImageGenerationTask, index: number, shouldBindResults: () => boolean): Promise<GeneratedImage> => {
+        const itemStartedAt = performance.now();
+        try {
+            for (let attempt = 0; attempt < 120; attempt += 1) {
+                const state = await pollImageGenerationTask(taskConfig, task);
+                if (state.status === "completed") {
+                    const image = state.images[0];
+                    if (!image) throw new Error("接口没有返回图片");
+                    const meta = await readImageMeta(image.dataUrl);
+                    const nextImage = {
+                        id: image.id,
+                        dataUrl: image.dataUrl,
+                        durationMs: performance.now() - itemStartedAt,
+                        width: meta.width,
+                        height: meta.height,
+                        bytes: image.dataUrl.startsWith("data:") ? getDataUrlByteSize(image.dataUrl) : 0,
+                        mimeType: meta.mimeType || "image/png",
+                    };
+                    if (shouldBindResults()) {
+                        setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
+                    }
+                    return nextImage;
+                }
+                if (state.status === "failed") throw new Error(state.error);
+                if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
+                await delay(2500);
+            }
+            throw new Error("图片生成超时，请稍后重试");
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "生成失败";
+            if (shouldBindResults()) {
+                setResults((value) => updateResultAt(value, index, { status: "failed", error: errorMessage }));
+            }
+            throw error;
+        }
+    };
+
+    const storeGeneratedImageForLog = async (image: GeneratedImage) => {
+        try {
+            const stored = await uploadImage(image.dataUrl);
+            return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+        } catch {
+            return image;
+        }
+    };
 
     const previewGenerationLog = async (log: GenerationLog) => {
+        previewLogIdRef.current = log.id;
+        activeResultLogIdRef.current = log.status === "生成中" ? log.id : null;
         setPreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
@@ -265,7 +462,16 @@ export default function ImagePage() {
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", log.config.count);
-        setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
+        if (log.status === "生成中" && log.tasks?.length) {
+            setResults(Array.from({ length: log.tasks.length }, () => ({ id: nanoid(), status: "pending" })));
+            setRunning(true);
+            setStartedAt(performance.now() - Math.max(0, Date.now() - log.createdAt));
+            void pollGenerationLog(log, undefined, { background: false });
+            return;
+        }
+        setRunning(false);
+        setStartedAt(0);
+        setResults(log.images.length ? log.images.map((image) => ({ id: image.id, status: "success", image })) : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
     };
 
     const buildRequestSnapshot = () => {
@@ -302,6 +508,17 @@ export default function ImagePage() {
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
         setPreviewLog(null);
+        previewLogIdRef.current = null;
+        activeResultLogIdRef.current = null;
+        if (snapshot.config.channelMode === "remote") {
+            const batchStartedAt = performance.now();
+            setElapsedMs(0);
+            setRunning(true);
+            setStartedAt(batchStartedAt);
+            setResults([{ id: nanoid(), status: "pending" }]);
+            void createRemoteGenerationLog(snapshot, batchStartedAt, 1);
+            return;
+        }
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
         void runGenerationSlot(index, snapshot).catch(() => {});
     };
@@ -732,6 +949,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         status: log.status || "成功",
         images,
         thumbnails: images.map((image) => image.dataUrl).filter(Boolean),
+        tasks: log.tasks || [],
+        error: log.error,
     };
 }
 
@@ -782,6 +1001,8 @@ function buildLog({
     failCount,
     status,
     images,
+    tasks,
+    error,
 }: {
     prompt: string;
     model: string;
@@ -792,6 +1013,8 @@ function buildLog({
     failCount: number;
     status: GenerationLog["status"];
     images: GeneratedImage[];
+    tasks?: ImageGenerationTask[];
+    error?: string;
 }): GenerationLog {
     const logConfig = {
         model: config.model,
@@ -818,5 +1041,21 @@ function buildLog({
         status,
         images,
         thumbnails: images.map((image) => image.dataUrl).filter(Boolean),
+        tasks,
+        error,
     };
+}
+
+function buildImageConfig(config: AiConfig, model: string): AiConfig {
+    return {
+        ...config,
+        channelMode: "remote",
+        model,
+        imageModel: model,
+        count: "1",
+    };
+}
+
+function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -1,0 +1,15 @@
+services:
+  app:
+    environment:
+      APP_ROLE: web
+
+  worker:
+    image: ghcr.io/basketikun/infinite-canvas:latest
+    container_name: infinite-canvas-worker
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: worker
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

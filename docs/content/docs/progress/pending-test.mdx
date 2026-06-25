@@ -5,6 +5,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- 远程模式图片生成改为异步任务：后端新增 `image_tasks` 表和 `/api/v1/image-tasks/generations`、`/api/v1/image-tasks/edits`、`/api/v1/image-tasks/:id`、`/api/v1/image-tasks` 接口；图片工作台创建任务后改为轮询结果，批量创建时会保留已成功创建的任务并统计创建失败数量，单张失败重试只重新创建 1 个任务，画布图片节点生成/重试/局部编辑/角度生成会保存 `imageTaskId`/`imageTaskMode` 并在刷新后继续恢复未完成任务，画布助手远程图片消息会保存 `imageTasks`/`imagePrompt` 并在刷新后继续轮询；任务队列现已增加 `locked_by`、`locked_until`、`attempts`、`next_run_at` 租约字段，并对短暂网络错误、429、5xx 做有限自动重试；成功结果会转存为站内稳定图片 URL（`/api/media/generated-images/:id`）；同时新增 `APP_ROLE=all|web|worker` 角色启动方式，需要验证文生图、图生图、失败返还、页面刷新恢复、结果图片刷新后仍可访问，以及 Render 服务重启后 `pending/running` 任务自动恢复、独立 worker 运行和重试节奏。当前还补了任务结果恢复清单，清单和本地图片文件会先写临时文件再替换，且清单存放在非公开目录、公开媒体接口只服务图片文件；极端情况下实例重启后可继续接回已落盘但尚未写回数据库的结果，也需要验证恢复后不会重复生成图片文件，并验证恢复链本地落盘短暂失败时会进入有限重试或失败终态、不长期停在 `running`。
+- Docker 部署已新增 `docker-compose.worker.yml` 和 `docker-compose.local.worker.yml`，可把 Web/API 与图片任务 worker 拆成两个容器运行；需要验证 `app=APP_ROLE=web`、`worker=APP_ROLE=worker` 时任务创建、轮询、重试和结果写回都正常，且不会重复消费同一任务。
 - 视频创作台创建视频任务成功后会立即写入左侧生成记录，状态显示为“生成中”；刷新页面后会读取本地任务 ID 继续轮询，任务成功或失败后更新同一条记录，需要验证 OpenAI 视频接口和 Seedance 任务接口的刷新恢复。
 - 修复画布文字节点编辑时双击进入编辑、全选文本出现重影和错位的问题；文字节点内容编辑框改为使用原生 textarea 文本渲染，仍保留 `@` 资源候选插入，需要验证编辑态选区、展示态文字换行和右上角“生图”按钮避让都正常。
 - 配置弹窗新增 WebDAV 同步配置，可填写 WebDAV 地址、远程目录、用户名和密码/应用密码，并选择“前端直连”或“Next.js 转发”；远端会按 `canvas/`、`assets/`、`image-workbench/`、`video-workbench/` 四个业务目录分别写入 `manifest.json` 清单和 `files/` 媒体目录，会合并画布项目、我的素材、生图/视频生成记录和引用到的本地媒体文件，四个业务分区会并发同步，并在同步中显示读取远端、检查媒体、上传新增媒体、上传清单等阶段和文件计数进度条；WebDAV 请求会做超时提示，目录已存在但 `MKCOL` 返回 `423 Locked` 时会复查目录存在后继续同步，需要在支持 CORS 的 NAS/WebDAV 服务和不支持 CORS 的 Koofr 转发模式下验证首次上传、第二台设备拉取合并、再次同步和认证失败提示。

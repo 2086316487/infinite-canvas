@@ -31,3 +31,20 @@ func TestNormalizeDockerSQLiteDSNLeavesLocalPathWithoutMountedDataDir(t *testing
 		t.Fatalf("DatabaseDSN = %q, want relative local path", Cfg.DatabaseDSN)
 	}
 }
+
+func TestNormalizeAppRole(t *testing.T) {
+	cases := map[string]string{
+		"":        "all",
+		"all":     "all",
+		"ALL":     "all",
+		"web":     "web",
+		" worker ": "worker",
+		"unknown": "all",
+	}
+
+	for input, want := range cases {
+		if got := normalizeAppRole(input); got != want {
+			t.Fatalf("normalizeAppRole(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

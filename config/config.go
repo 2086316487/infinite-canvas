@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	Port                string `env:"PORT" envDefault:"8080"`
+	AppRole             string `env:"APP_ROLE" envDefault:"all"`
 	AdminUsername       string `env:"ADMIN_USERNAME" envDefault:"admin"`
 	AdminPassword       string `env:"ADMIN_PASSWORD" envDefault:"infinite-canvas"`
 	JWTSecret           string `env:"JWT_SECRET" envDefault:"infinite-canvas"`
@@ -33,6 +34,7 @@ func Load() error {
 	if err := env.Parse(&Cfg); err != nil {
 		return err
 	}
+	Cfg.AppRole = normalizeAppRole(Cfg.AppRole)
 	normalizeDockerSQLiteDSN("/app/data")
 	if strings.TrimSpace(Cfg.JWTSecret) == "" || Cfg.JWTSecret == "infinite-canvas" {
 		secret, err := randomSecret()
@@ -42,6 +44,27 @@ func Load() error {
 		Cfg.JWTSecret = secret
 	}
 	return nil
+}
+
+func normalizeAppRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all":
+		return "all"
+	case "web":
+		return "web"
+	case "worker":
+		return "worker"
+	default:
+		return "all"
+	}
+}
+
+func WebEnabled() bool {
+	return Cfg.AppRole == "all" || Cfg.AppRole == "web"
+}
+
+func ImageTaskWorkerEnabled() bool {
+	return Cfg.AppRole == "all" || Cfg.AppRole == "worker"
 }
 
 func normalizeDockerSQLiteDSN(appDataDir string) {

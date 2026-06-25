@@ -1,0 +1,83 @@
+---
+title: 方案二：前端直连 Render + URL 结果返回
+description: Netlify 只承载前端，浏览器直接请求 Render Go API，并尽量用 URL 图片结果减少长响应失败。
+---
+
+# 方案二：前端直连 Render + URL 结果返回
+
+## 背景
+
+早期部署链路是：
+
+```text
+Browser -> Netlify Next.js Function -> Render Go API -> AI upstream
+```
+
+生图请求通常耗时较长，而且项目曾使用 `response_format: "b64_json"` 返回大体积 JSON。上游已经成功、渠道已经扣费时，Netlify Function 或浏览器连接仍可能因为超时、大响应写回、网络波动而显示失败。
+
+方案二的目标是把 Netlify 从代理链路中移除：
+
+```text
+Browser -> Render Go API -> AI upstream
+```
+
+Netlify 只负责前端页面和静态资源。
+
+## 核心配置
+
+前端新增公共环境变量：
+
+```env
+NEXT_PUBLIC_API_BASE_URL=https://your-render-service.onrender.com
+```
+
+未配置时，本地开发继续使用相对路径 `/api/*`。
+
+Render 后端需要开启 CORS 白名单，至少包含：
+
+```text
+https://your-site.netlify.app
+http://localhost:3000
+http://127.0.0.1:3000
+```
+
+允许常用方法和请求头：
+
+```text
+GET, POST, PUT, PATCH, DELETE, OPTIONS
+Authorization, Content-Type
+```
+
+图片请求优先使用 URL 结果：
+
+```json
+{
+  "response_format": "url"
+}
+```
+
+前端仍保留 `url` 和 `b64_json` 双解析，避免中转站不完全兼容时直接失效。
+
+## 优点
+
+- 改动小，适合快速绕开 Netlify Function 超时和响应体限制。
+- 保留后台渠道配置、用户登录和扣费逻辑，不向前端暴露 API Key。
+- URL 结果比 base64 更适合画布展示、资产持久化和后续对象存储。
+
+## 缺点
+
+- 本质仍是一次同步 HTTP 长请求，极慢生成、浏览器断线或 Render 写回失败时仍可能误报失败。
+- Render Free 冷启动和实例重启仍会影响体验。
+- 需要维护 CORS 白名单。
+- 如果上游 URL 是临时地址，后续仍需要转存到 Supabase Storage。
+
+## 验收标准
+
+- Netlify 页面能正常加载。
+- 浏览器 Network 中生图请求直接访问 Render 域名。
+- 登录、后台设置、模型列表和生图接口均可用。
+- Render 日志可以看到 AI 请求耗时与响应写回情况。
+
+## 回滚方式
+
+移除或清空 `NEXT_PUBLIC_API_BASE_URL`，前端会回到相对路径 `/api/*`。

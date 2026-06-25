@@ -1,4 +1,3 @@
-# 构建 Next.js 前端产物。
 FROM oven/bun:1.3.13 AS web-build
 
 WORKDIR /app/web
@@ -9,7 +8,6 @@ COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
 RUN bun run build
 
-# 构建 Go 后端入口。
 FROM golang:1.25-alpine AS api-build
 
 WORKDIR /app
@@ -24,7 +22,6 @@ COPY service ./service
 COPY main.go ./
 RUN go build -o /server .
 
-# 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM node:22-bookworm-slim
 
 WORKDIR /app
@@ -37,10 +34,13 @@ COPY --from=web-build /app/web/.next/static /app/web/.next/static
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV APP_ROLE=all
 ENV PROMPT_DATA_DIR=/app/data/prompts
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/data/prompts
 
 EXPOSE 3000
-# 先启动内部 Go API，再由 Next.js 提供页面并代理 /api/*。
-CMD ["sh", "-c", "PORT=8080 /app/server & cd /app/web && PORT=3000 node server.js"]
+
+# APP_ROLE=worker runs only the Go image-task worker.
+# Other modes keep serving the Next.js app and start the Go API in the background.
+CMD ["sh", "-c", "if [ \"${APP_ROLE:-all}\" = \"worker\" ]; then PORT=8080 APP_ROLE=worker /app/server; else PORT=8080 APP_ROLE=${APP_ROLE:-all} /app/server & cd /app/web && PORT=3000 node server.js; fi"]

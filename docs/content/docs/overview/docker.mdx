@@ -38,6 +38,37 @@ cp .env.example .env
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
+如果要把图片异步任务 worker 单独拆出来，可以复用同一镜像并把环境变量改为：
+
+```text
+APP_ROLE=worker
+```
+
+此时容器只运行图片任务 worker，不再启动前端页面。对应的 Web 容器可设置为：
+
+```text
+APP_ROLE=web
+```
+
+如果不拆分，保持默认 `APP_ROLE=all` 即可。
+
+项目根目录已额外提供两份 override：
+
+- `docker-compose.worker.yml`：发布镜像拆分 worker
+- `docker-compose.local.worker.yml`：本地源码构建拆分 worker
+
+使用发布镜像拆分角色：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.worker.yml up -d
+```
+
+基于当前源码本地构建并拆分角色：
+
+```bash
+docker compose -f docker-compose.local.yml -f docker-compose.local.worker.yml up -d --build
+```
+
 ## 文档站镜像
 
 文档站位于 `docs/` 目录，按带服务端能力的 Next.js standalone 应用单独构建，不打进主应用镜像。
@@ -58,7 +89,7 @@ docker compose -f docker-compose.local.yml up -d --build
 
 ## 数据目录
 
-`docker-compose.yml` 会把本地 `./data` 挂载到容器内 `/app/data`，用于保存 SQLite 数据库、提示词数据和上传素材。
+`docker-compose.yml` 会把本地 `./data` 挂载到容器内 `/app/data`，用于保存 SQLite 数据库、提示词数据、上传素材，以及图片异步任务转存后的结果文件。
 
 Docker 部署时建议把 `.env` 中的 SQLite 路径设置为：
 

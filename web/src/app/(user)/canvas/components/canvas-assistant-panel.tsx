@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, History, ImageIcon, LoaderCircle, MessageSquare, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { Button, Modal, Tooltip } from "antd";
 import { motion } from "motion/react";
@@ -12,7 +12,7 @@ import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { nanoid } from "nanoid";
 import { cn } from "@/lib/utils";
-import { requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage } from "@/services/api/image";
+import { createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage, type ImageGenerationTask } from "@/services/api/image";
 import { imageToDataUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -21,7 +21,7 @@ import type { ReferenceImage } from "@/types/image";
 import { DiaTextReveal } from "@/components/ui/dia-text-reveal";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
-import { CanvasNodeType, type CanvasAssistantImage, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
+import { CanvasNodeType, type CanvasAssistantImage, type CanvasAssistantImageTask, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
 
 type AssistantMode = "ask" | "image";
 const PANEL_MOTION_MS = 500;
@@ -46,6 +46,8 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     const effectiveConfig = useEffectiveConfig();
     const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
+    const activeImageMessageIdsRef = useRef<Set<string>>(new Set());
+    const runningCountRef = useRef(0);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -83,30 +85,40 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     const assistantConfig = useMemo(() => ({ ...effectiveConfig, count: effectiveConfig.canvasImageCount || effectiveConfig.count }), [effectiveConfig]);
     const iconButtonStyle = { color: theme.node.muted };
 
+    const beginRunning = useCallback(() => {
+        runningCountRef.current += 1;
+        setIsRunning(true);
+    }, []);
+
+    const endRunning = useCallback(() => {
+        runningCountRef.current = Math.max(0, runningCountRef.current - 1);
+        setIsRunning(runningCountRef.current > 0);
+    }, []);
+
     useEffect(() => {
         setRemovedReferenceIds(new Set());
     }, [selectedNodeKey]);
 
-    const updateSession = (sessionId: string, updater: (session: CanvasAssistantSession) => CanvasAssistantSession) => {
+    const updateSession = useCallback((sessionId: string, updater: (session: CanvasAssistantSession) => CanvasAssistantSession) => {
         setLocalSessions((prev) => prev.map((session) => (session.id === sessionId ? updater(session) : session)));
-    };
+    }, []);
 
-    const appendMessage = (sessionId: string, message: CanvasAssistantMessage) => {
+    const appendMessage = useCallback((sessionId: string, message: CanvasAssistantMessage) => {
         updateSession(sessionId, (session) => ({
             ...session,
             title: session.messages.length ? session.title : message.text.slice(0, 18) || "新对话",
             messages: [...session.messages, message],
             updatedAt: new Date().toISOString(),
         }));
-    };
+    }, [updateSession]);
 
-    const updateMessage = (sessionId: string, messageId: string, patch: Partial<CanvasAssistantMessage>) => {
+    const updateMessage = useCallback((sessionId: string, messageId: string, patch: Partial<CanvasAssistantMessage>) => {
         updateSession(sessionId, (session) => ({
             ...session,
             messages: session.messages.map((message) => (message.id === messageId ? { ...message, ...patch } : message)),
             updatedAt: new Date().toISOString(),
         }));
-    };
+    }, [updateSession]);
 
     const startChatSession = () => {
         if (activeSession && activeSession.messages.length === 0) {
@@ -140,6 +152,46 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
         cleanupImages({ sessions: [session] });
     };
 
+    const pollAssistantImageMessage = useCallback(async (sessionId: string, messageId: string, imagePrompt: string, tasks: CanvasAssistantImageTask[], initialFailCount = 0) => {
+        if (!tasks.length || activeImageMessageIdsRef.current.has(messageId)) return;
+        activeImageMessageIdsRef.current.add(messageId);
+        beginRunning();
+        try {
+            const settled = await Promise.allSettled(tasks.map((task) => waitForAssistantImageTask(buildAssistantTaskConfig(effectiveConfig, task), task)));
+            const images = settled.filter((item): item is PromiseFulfilledResult<{ id: string; dataUrl: string }> => item.status === "fulfilled").map((item) => item.value);
+            const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+            const failCount = initialFailCount + tasks.length - images.length;
+            if (!images.length) {
+                updateMessage(sessionId, messageId, { text: failed?.reason instanceof Error ? failed.reason.message : "生成失败", isLoading: false, imageTasks: undefined, imageTaskCreateFailCount: undefined });
+                return;
+            }
+            const storedImages = await Promise.all(images.map(storeAssistantImage));
+            updateMessage(sessionId, messageId, {
+                text: failCount ? `生成了 ${storedImages.length} 张图片，失败 ${failCount} 张` : `生成了 ${storedImages.length} 张图片`,
+                images: storedImages.map((image) => ({ ...image, prompt: imagePrompt })),
+                isLoading: false,
+                imagePrompt,
+                imageTasks: undefined,
+                imageTaskCreateFailCount: undefined,
+            });
+        } catch (error) {
+            updateMessage(sessionId, messageId, { text: error instanceof Error ? error.message : "生成失败", isLoading: false, imageTasks: undefined, imageTaskCreateFailCount: undefined });
+        } finally {
+            activeImageMessageIdsRef.current.delete(messageId);
+            endRunning();
+        }
+    }, [beginRunning, effectiveConfig, endRunning, updateMessage]);
+
+    useEffect(() => {
+        for (const session of localSessions) {
+            for (const message of session.messages) {
+                if (message.role === "assistant" && message.mode === "image" && message.isLoading && message.imageTasks?.length) {
+                    void pollAssistantImageMessage(session.id, message.id, message.imagePrompt || message.text, message.imageTasks, message.imageTaskCreateFailCount || 0);
+                }
+            }
+        }
+    }, [localSessions, pollAssistantImageMessage]);
+
     const sendMessage = async (text: string, nextMode: AssistantMode, history: CanvasAssistantMessage[], savedReferences?: CanvasAssistantReference[]) => {
         const requestConfig = { ...effectiveConfig, count: nextMode === "image" ? effectiveConfig.canvasImageCount || effectiveConfig.count : effectiveConfig.count, model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model };
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
@@ -159,18 +211,38 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
         appendMessage(session.id, userMessage);
         appendMessage(session.id, { id: assistantId, role: "assistant", mode: nextMode, text: nextMode === "image" ? "正在生成图片" : "正在回答", isLoading: true });
         setPrompt("");
-        setIsRunning(true);
+        beginRunning();
 
         try {
             if (nextMode === "image") {
                 const referenceImages: ReferenceImage[] = await Promise.all(
                     refs.filter((item) => item.dataUrl).map(async (item) => ({ id: item.id, name: `${item.title}.png`, type: "image/png", dataUrl: await imageToDataUrl(item), storageKey: item.storageKey })),
                 );
+                if (requestConfig.channelMode === "remote") {
+                    const taskCount = assistantImageTaskCount(requestConfig.count);
+                    const singleTaskConfig = { ...requestConfig, count: "1" };
+                    const settledTasks = await Promise.allSettled(
+                        Array.from({ length: taskCount }, () => (referenceImages.length ? createImageEditTask(singleTaskConfig, text, referenceImages) : createImageGenerationTask(singleTaskConfig, text))),
+                    );
+                    const tasks = settledTasks.filter((item): item is PromiseFulfilledResult<ImageGenerationTask> => item.status === "fulfilled").map((item) => item.value);
+                    const failedTask = settledTasks.find((item): item is PromiseRejectedResult => item.status === "rejected");
+                    const createFailCount = settledTasks.length - tasks.length;
+                    if (!tasks.length) throw (failedTask?.reason instanceof Error ? failedTask.reason : new Error("生成失败"));
+                    updateMessage(session.id, assistantId, {
+                        text: createFailCount ? `部分任务创建失败，继续等待 ${tasks.length} 个任务` : "正在生成图片",
+                        imagePrompt: text,
+                        imageTasks: tasks,
+                        imageTaskCreateFailCount: createFailCount || undefined,
+                        isLoading: true,
+                    });
+                    void pollAssistantImageMessage(session.id, assistantId, text, tasks, createFailCount);
+                    return;
+                }
                 const images = referenceImages.length ? await requestEdit(requestConfig, text, referenceImages) : await requestGeneration(requestConfig, text);
-                const storedImages = await Promise.all(images.map((image) => uploadImage(image.dataUrl)));
+                const storedImages = await Promise.all(images.map(storeAssistantImage));
                 updateMessage(session.id, assistantId, {
                     text: `生成了 ${storedImages.length} 张图片`,
-                    images: storedImages.map((image, index) => ({ id: images[index].id, dataUrl: image.url, storageKey: image.storageKey, prompt: text })),
+                    images: storedImages.map((image) => ({ ...image, prompt: text })),
                     isLoading: false,
                 });
                 return;
@@ -183,7 +255,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
         } catch (error) {
             updateMessage(session.id, assistantId, { text: error instanceof Error ? error.message : "操作失败", isLoading: false });
         } finally {
-            setIsRunning(false);
+            endRunning();
         }
     };
 
@@ -664,6 +736,48 @@ async function buildChatMessages(messages: CanvasAssistantMessage[]): Promise<Ch
             };
         }),
     );
+}
+
+async function waitForAssistantImageTask(config: AiConfig, task: CanvasAssistantImageTask): Promise<{ id: string; dataUrl: string }> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        const state = await pollImageGenerationTask(config, task);
+        if (state.status === "completed") {
+            const image = state.images[0];
+            if (!image) throw new Error("接口没有返回图片");
+            return image;
+        }
+        if (state.status === "failed") throw new Error(state.error);
+        if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
+        await delay(2500);
+    }
+    throw new Error("图片生成超时，请稍后重试");
+}
+
+async function storeAssistantImage(image: { id: string; dataUrl: string }) {
+    try {
+        const stored = await uploadImage(image.dataUrl);
+        return { id: image.id, dataUrl: stored.url, storageKey: stored.storageKey };
+    } catch {
+        return image;
+    }
+}
+
+function buildAssistantTaskConfig(config: AiConfig, task: CanvasAssistantImageTask): AiConfig {
+    return {
+        ...config,
+        channelMode: "remote",
+        model: task.model,
+        imageModel: task.model,
+        count: "1",
+    };
+}
+
+function assistantImageTaskCount(count: string) {
+    return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(count)) || 1)));
+}
+
+function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createSession(): CanvasAssistantSession {

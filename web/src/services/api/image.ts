@@ -22,6 +22,23 @@ type ImageApiResponse = {
     [key: string]: unknown;
 };
 
+type ApiEnvelope<T> = T | { code?: number; data?: T | null; msg?: string };
+type ImageTaskStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+type ImageTaskOutput = { url?: string; dataUrl?: string; mimeType?: string; revisedPrompt?: string };
+type ImageTaskResponse = {
+    id: string;
+    mode?: "generation" | "edit";
+    model?: string;
+    status?: ImageTaskStatus;
+    error?: string;
+    outputs?: ImageTaskOutput[];
+};
+type ImageTaskCreateResponse = { id: string; status?: ImageTaskStatus };
+
+export type GeneratedImageApiResult = { id: string; dataUrl: string };
+export type ImageGenerationTask = { id: string; mode: "generation" | "edit"; model: string; status?: ImageTaskStatus };
+export type ImageGenerationTaskState = { status: "pending" } | { status: "completed"; images: GeneratedImageApiResult[] } | { status: "failed"; error: string };
+
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
     medium: 2048,
@@ -163,6 +180,25 @@ function parseImagePayload(payload: ImageApiResponse) {
     throw new Error("接口没有返回图片");
 }
 
+function parseImageTaskPayload(task: ImageTaskResponse) {
+    const images = (task.outputs || [])
+        .map((output) => output.dataUrl || output.url)
+        .filter((value): value is string => Boolean(value))
+        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+    if (images.length > 0) return images;
+    throw new Error("Image task completed without images");
+}
+
+function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
+    if (!payload) throw new Error(emptyMessage);
+    if (typeof payload === "object" && "code" in payload && typeof payload.code === "number") {
+        if (payload.code !== 0) throw new Error(payload.msg || "Request failed");
+        if (!payload.data) throw new Error(emptyMessage);
+        return payload.data;
+    }
+    return payload as T;
+}
+
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
@@ -222,7 +258,105 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
     return systemPrompt ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
 }
 
+function imageRequestCount(config: AiConfig) {
+    return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+}
+
+function buildImageGenerationPayload(config: AiConfig, prompt: string) {
+    const n = imageRequestCount(config);
+    const quality = normalizeQuality(config.quality);
+    const requestSize = resolveRequestSize(quality, config.size);
+    return {
+        model: config.model,
+        prompt: withSystemPrompt(config, prompt),
+        n,
+        ...(quality ? { quality } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
+        response_format: "url",
+        output_format: IMAGE_OUTPUT_FORMAT,
+    };
+}
+
+async function buildImageEditFormData(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage) {
+    const n = imageRequestCount(config);
+    const quality = normalizeQuality(config.quality);
+    const requestSize = resolveRequestSize(quality, config.size);
+    const requestPrompt = buildImageReferencePromptText(prompt, references);
+    const formData = new FormData();
+    formData.set("model", config.model);
+    formData.set("prompt", withSystemPrompt(config, requestPrompt));
+    formData.set("n", String(n));
+    formData.set("response_format", "url");
+    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
+    if (quality) {
+        formData.set("quality", quality);
+    }
+    if (requestSize) {
+        formData.set("size", requestSize);
+    }
+    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    files.forEach((file) => formData.append("image", file));
+    if (mask) formData.set("mask", dataUrlToFile(mask));
+    return formData;
+}
+
+export async function createImageGenerationTask(config: AiConfig, prompt: string): Promise<ImageGenerationTask> {
+    if (config.channelMode !== "remote") throw new Error("Image tasks are only available in remote mode");
+    try {
+        const response = await axios.post<ApiEnvelope<ImageTaskCreateResponse>>(aiApiUrl(config, "/image-tasks/generations"), buildImageGenerationPayload(config, prompt), { headers: aiHeaders(config, "application/json") });
+        const task = unwrapEnvelope(response.data, "Image task was not created");
+        if (!task.id) throw new Error("Image task was not created");
+        return { id: task.id, mode: "generation", model: config.model, status: task.status };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Image task creation failed"));
+    }
+}
+
+export async function createImageEditTask(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage): Promise<ImageGenerationTask> {
+    if (config.channelMode !== "remote") throw new Error("Image tasks are only available in remote mode");
+    try {
+        const response = await axios.post<ApiEnvelope<ImageTaskCreateResponse>>(aiApiUrl(config, "/image-tasks/edits"), await buildImageEditFormData(config, prompt, references, mask), { headers: aiHeaders(config) });
+        const task = unwrapEnvelope(response.data, "Image task was not created");
+        if (!task.id) throw new Error("Image task was not created");
+        return { id: task.id, mode: "edit", model: config.model, status: task.status };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Image task creation failed"));
+    }
+}
+
+export async function pollImageGenerationTask(config: AiConfig, task: ImageGenerationTask): Promise<ImageGenerationTaskState> {
+    if (config.channelMode !== "remote") throw new Error("Image tasks are only available in remote mode");
+    try {
+        const response = await axios.get<ApiEnvelope<ImageTaskResponse>>(aiApiUrl(config, `/image-tasks/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config) });
+        const payload = unwrapEnvelope(response.data, "Image task was not found");
+        if (payload.status === "succeeded") {
+            refreshRemoteUser(config);
+            return { status: "completed", images: parseImageTaskPayload(payload) };
+        }
+        if (payload.status === "failed" || payload.status === "cancelled") {
+            return { status: "failed", error: payload.error || "Image generation failed" };
+        }
+        return { status: "pending" };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Image task polling failed"));
+    }
+}
+
+export async function waitForImageGenerationTask(config: AiConfig, task: ImageGenerationTask): Promise<GeneratedImageApiResult[]> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        const state = await pollImageGenerationTask(config, task);
+        if (state.status === "completed") return state.images;
+        if (state.status === "failed") throw new Error(state.error);
+        if (attempt === 119) throw new Error("Image generation timed out, please try again later");
+        await delay(2500);
+    }
+    throw new Error("Image generation timed out, please try again later");
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string) {
+    if (config.channelMode === "remote") {
+        return waitForImageGenerationTask(config, await createImageGenerationTask(config, prompt));
+    }
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
@@ -251,6 +385,9 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage) {
+    if (config.channelMode === "remote") {
+        return waitForImageGenerationTask(config, await createImageEditTask(config, prompt, references, mask));
+    }
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
@@ -358,4 +495,8 @@ export async function fetchImageModels(config: AiConfig) {
     } catch (error) {
         throw new Error(readAxiosError(error, "读取模型失败"));
     }
+}
+
+function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }

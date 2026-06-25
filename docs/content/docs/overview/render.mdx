@@ -22,10 +22,20 @@ description: 使用 Render 部署无限画布
 默认使用 Render 免费 Web Service：
 
 - 空闲约 15 分钟后会休眠，下次访问会自动唤醒。
-- 免费版本地文件不是持久化存储，SQLite 数据可能在重启、重新部署后丢失。
+- 免费版本地文件不是持久化存储，SQLite 数据和图片异步任务转存结果都可能在重启、重新部署后丢失。
 - 适合体验和演示，不适合长期保存正式数据。
 
 如果要长期使用，建议升级 Render 付费实例并挂载 Persistent Disk，或改用 PostgreSQL。
+
+## 方案三补充
+
+如果你已经启用图片异步任务方案，可继续按下面方式拆分角色：
+
+- Web 服务设置 `APP_ROLE=web`
+- 单独 worker 服务设置 `APP_ROLE=worker`
+
+这样 Web 只负责页面、接口和任务创建，worker 单独负责轮询 `image_tasks`、执行上游请求和自动重试。  
+如果暂时不拆分，也可以继续使用默认 `APP_ROLE=all`。
 
 ## 管理员账号
 

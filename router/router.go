@@ -31,9 +31,21 @@ func New() *gin.Engine {
 	api.HEAD("/media/references/:id", func(c *gin.Context) {
 		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
 	})
+	api.GET("/media/generated-images/:id", func(c *gin.Context) {
+		handler.GeneratedImageTaskMedia(c.Writer, c.Request, c.Param("id"))
+	})
+	api.HEAD("/media/generated-images/:id", func(c *gin.Context) {
+		handler.GeneratedImageTaskMedia(c.Writer, c.Request, c.Param("id"))
+	})
 	v1 := api.Group("/v1", middleware.UserAuth)
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))
+	v1.POST("/image-tasks/generations", gin.WrapF(handler.CreateImageGenerationTask))
+	v1.POST("/image-tasks/edits", gin.WrapF(handler.CreateImageEditTask))
+	v1.GET("/image-tasks", gin.WrapF(handler.ImageTasks))
+	v1.GET("/image-tasks/:id", func(c *gin.Context) {
+		handler.ImageTask(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/chat/completions", gin.WrapF(handler.AIChatCompletions))
 	v1.POST("/audio/speech", gin.WrapF(handler.AIAudioSpeech))
 	v1.POST("/videos", gin.WrapF(handler.AIVideos))
