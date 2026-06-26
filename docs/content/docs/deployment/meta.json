@@ -3,6 +3,7 @@
   "root": true,
   "defaultOpen": true,
   "pages": [
+    "current-production-chain",
     "solution-2-direct-render-url-results",
     "solution-3-async-task-polling"
   ]

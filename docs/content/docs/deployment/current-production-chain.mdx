@@ -1,0 +1,192 @@
+---
+title: 当前生产链路
+description: 记录本项目自己的 Netlify + Render + Supabase 部署链路，避免误用原项目演示地址或压缩上下文后丢失部署记忆。
+---
+
+# 当前生产链路
+
+这份文档只记录本项目自己的线上链路。不要把 README 或文档站里原项目留下的公开演示地址当成当前生产环境。
+
+## 压缩后先读这里
+
+如果 Codex 上下文被压缩，继续部署或排查前先按这个顺序恢复事实：
+
+1. 先读本文档，确认当前项目链路和不能混淆的对象。
+2. 再读 `solution-3-async-task-polling.mdx`，确认方案三的前后端改动范围。
+3. 以 fork `2086316487/infinite-canvas` 的远端提交为部署源，不要从 README 演示地址反推生产环境。
+4. Render 只核对 Go API 服务 `infinite-canvas-api`，Netlify 站点必须从 Netlify Dashboard 查，不要猜 URL。
+5. 继续部署前先确认 Render、Netlify、Supabase 三端是否指向同一套环境。
+
+## 不能混淆的对象
+
+- 代码源以 fork 为准：`2086316487/infinite-canvas`。
+- 不要把上游仓库 `basketikun/infinite-canvas` 当成部署源。
+- 不要使用原项目演示站 `https://infinite-canvas-cpco.onrender.com` 做当前项目验收。
+- Render 根路径返回 404 不代表 API 失败，后端健康检查看 `/api/health`。
+
+## 当前目标链路
+
+```text
+Browser
+  -> Netlify web 前端
+  -> Render Singapore Go API
+  -> Supabase Singapore Postgres
+  -> Supabase Storage
+  -> AI upstream
+```
+
+各组件职责如下：
+
+- Netlify 只部署 `web` 前端和静态资源。
+- Netlify 不承载大文件。
+- Netlify 不代理长耗时 AI 请求，尤其不要让生图/视频生成走 Netlify Function 长连接。
+- 浏览器前端通过 `NEXT_PUBLIC_API_BASE_URL` 直接请求 Render Go API。
+- Render Singapore 只跑 Go API，不跑 Next.js。
+- Render 不使用 SQLite 保存正式数据。
+- Render 不把本地磁盘当成长期文件存储。
+- Supabase Singapore Postgres 保存用户、后台配置、提示词、资产元数据和任务元数据。
+- Supabase Storage 保存上传参考图、生成结果和视频临时文件。
+
+## 前端 Netlify
+
+Netlify 部署源必须指向 fork：
+
+```text
+2086316487/infinite-canvas
+```
+
+当前已确认的 Netlify 前端站点：
+
+```text
+Site name: infinite-canvas-2086316487
+Public URL: https://infinite-canvas-2086316487.netlify.app
+Dashboard: https://app.netlify.com/projects/infinite-canvas-2086316487
+Repository: https://github.com/2086316487/infinite-canvas
+Branch: main
+```
+
+生产环境至少需要确认：
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=https://infinite-canvas-api.onrender.com
+NEXT_PUBLIC_DOC_URL=https://docs.canvas.best
+```
+
+注意：
+
+- `NEXT_PUBLIC_API_BASE_URL` 留空时，前端会回到相对路径 `/api/*`，这不符合当前“Netlify 只承载前端”的生产链路。
+- 方案三同时修改了 Go API 和 Netlify 前端轮询逻辑，所以只重新部署 Render API 不够，Netlify 前端也需要部署到同一提交。
+- 实际 Netlify 站点 URL 需要以 Netlify Dashboard 为准，并同步写入 Render 的 `CORS_ALLOWED_ORIGINS`。
+- 当前仓库未发现 `netlify.toml`，Netlify 的站点、构建命令、发布目录和生产环境变量需要以 Dashboard 为准。
+
+## 方案三上线影响
+
+方案三不是单纯后端改动，部署和配置需要同时核对这些位置：
+
+- Render Go API：需要部署包含异步任务接口、worker 轮询、任务表读写的提交。
+- Netlify web：需要部署包含创建任务、轮询任务、刷新后恢复任务状态的前端提交。
+- Supabase Postgres：需要由后端连接正式数据库，并能保存 `image_tasks` 等任务元数据。
+- Render CORS：必须放行实际 Netlify 生产域名，否则浏览器会被预检请求拦住。
+- 对象存储：当前仍是后续项，未接入 Supabase Storage 前不要把 Render 本地文件当长期结果存储。
+
+## 后端 Render
+
+当前已识别的 Render API 服务：
+
+```text
+Service name: infinite-canvas-api
+Service ID: srv-d8kj2ta8qa3s7384nhm0
+Dashboard: https://dashboard.render.com/web/srv-d8kj2ta8qa3s7384nhm0
+Public URL: https://infinite-canvas-api.onrender.com
+Health check: https://infinite-canvas-api.onrender.com/api/health
+Repository: https://github.com/2086316487/infinite-canvas
+Branch: main
+```
+
+当前已部署过的提交：
+
+```text
+Commit: 5c8d41f0916600e9cf2944b2ebfc570d52bc2393
+Message: fix: push fork docker images to fork ghcr owner
+Tag: v0.2.6
+```
+
+Render 生产环境必须确认这些变量：
+
+```bash
+STORAGE_DRIVER=postgres
+DATABASE_DSN=<Supabase Postgres connection string>
+CORS_ALLOWED_ORIGINS=<Netlify site origin>,http://localhost:3000,http://127.0.0.1:3000
+PUBLIC_BASE_URL=https://infinite-canvas-api.onrender.com
+```
+
+`APP_ROLE` 按部署形态决定：
+
+```text
+单 Render API 服务暂未拆 worker: APP_ROLE=all
+已拆独立 worker: API 服务 APP_ROLE=web，worker 服务 APP_ROLE=worker
+```
+
+注意：
+
+- 如果 API 服务设成 `APP_ROLE=web` 但没有独立 worker，图片异步任务只会创建和查询，不会被执行。
+- 如果 API 服务使用 SQLite 或本地 `data/*.db`，说明偏离了当前生产链路。
+- `render.yaml` 是通用一键部署配置，不应直接视为当前生产环境事实。
+- Render Free 实例不支持 Web Shell，因此不要把“无法用 Shell 打印环境变量”误判为 API 链路失败。
+- Render Dashboard 环境变量页当前可见关键变量名包括 `CORS_ALLOWED_ORIGINS`、`DATABASE_DSN`、`PUBLIC_BASE_URL`、`STORAGE_DRIVER`，但值被隐藏；涉及 DSN 或密钥时不要在文档里记录明文。
+
+## Supabase
+
+Supabase Singapore 的职责：
+
+- Postgres 保存正式业务数据。
+- `users`、后台配置、提示词、资产元数据、积分记录和 `image_tasks` 等由后端通过 GORM 使用。
+- 线上不要让这些数据落到 Render SQLite。
+
+对象存储目标：
+
+- 上传参考图、参考视频、参考音频。
+- 图片任务生成结果。
+- 视频生成临时文件或最终文件。
+
+当前代码里仍能看到本地文件落盘路径：
+
+```text
+data/reference-media/
+data/generated-image-tasks/
+data/generated-image-task-recovery/
+```
+
+这说明对象存储链路需要作为后续重点核对项。没有完成 Supabase Storage 接入前，这些文件只能按临时文件处理，不要承诺长期可用。
+
+## 部署顺序
+
+1. 确认本地和远端都是 fork `2086316487/infinite-canvas`。
+2. 确认要部署的提交已经推到 fork 的 `main`。
+3. 部署 Render Go API，确认 `/api/health` 返回 `200 OK` 和 `ok`。
+4. 确认 Render 环境变量使用 Supabase Postgres，并配置了 Netlify 域名 CORS。
+5. 部署 Netlify web 前端到同一个提交。
+6. 在 Netlify 正式域名打开页面，不使用原项目演示站。
+7. 用浏览器 Network 确认 API 请求直接打到 Render 域名。
+8. 登录后测试 `/api/settings`、`/api/prompts`、`/api/assets`、`/api/v1/image-tasks`。
+9. 测试方案三时，确认创建任务能快速返回 task id，刷新页面后仍能继续轮询。
+10. 在 Render 日志和 Supabase 表中用 task id 串联排查。
+
+## 当前已知状态
+
+- Render API 已手动部署到 `5c8d41f`，Dashboard 显示 `Deploy live for 5c8d41f`，并验证 `/api/health` 返回 `200 OK`。
+- Netlify 前端已重新部署到 `main@5c8d41f`，Deploy ID 为 `6a3e04a9376d4f68049da834`，状态为 Published。
+- Netlify 正式域名为 `https://infinite-canvas-2086316487.netlify.app`，部署源确认为 `2086316487/infinite-canvas` 的 `main` 分支。
+- 从 Netlify 页面源站直接请求 Render API 已验证通过：`/api/health`、`/api/settings`、`/api/prompts` 返回 `200`。
+- 从 Netlify 页面源站请求 `/api/v1/image-tasks` 返回业务层未登录响应 `{ code: 1, msg: "未登录或权限不足" }`，说明方案三相关接口没有被 CORS 预检拦住。
+- Render 环境变量页能看到 `DATABASE_DSN`、`STORAGE_DRIVER`、`CORS_ALLOWED_ORIGINS`、`PUBLIC_BASE_URL` 等关键变量名；值隐藏，暂未记录明文。仍需在不泄露密钥的前提下确认 `DATABASE_DSN` 指向 Supabase Postgres 且 `STORAGE_DRIVER=postgres`。
+- 需要清理一次误测创建的临时用户：`codex_test_20260626043020`。
+- 前端和文档里容易误导到上游的展示链接已对齐 fork，例如应用 GitHub 按钮、版本检查地址、文档站 GitHub 配置和在线体验链接；生产页面是否生效以包含该改动的 Netlify/文档部署是否发布为准。
+
+## 测试注意事项
+
+- 不要对不确定的生产环境直接发起真实图片或视频生成，避免消耗上游额度。
+- 可以先测健康检查、公开配置、登录态、任务列表和参数校验。
+- 根路径 404 不是后端失败；Render Go API 看 `/api/health`。
+- CORS 预检失败通常说明 Render 没放行 Netlify 域名。
+- 如果日志里出现 `github.com/basketikun/infinite-canvas/...`，这通常是 Go module/import path，不等于部署源是上游仓库；部署源要看 Render 绑定仓库和 checkout commit。
