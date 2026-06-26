@@ -6,6 +6,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 # 待测试
 - 补齐公开部署引用清理：README、根目录 Docker Compose、worker Compose、文档站 Docker Compose、文档站首页/导航和 Docker 部署文档均指向 fork `2086316487/infinite-canvas` 或 Netlify 正式站点；应用 Docker 镜像工作流新增 `latest` 标签；并在 `AGENTS.md` 沉淀当前生产链路注意事项。需要验证 GHCR `latest` 镜像发布后 Docker Compose 能拉取 fork 镜像，文档站重新部署后不再出现原演示站入口。
 
+- 应用 Docker 镜像构建阶段改为用 Node 直接执行 Next.js build，绕开 arm64 runner 中 `bun run build` 触发的 Bun 崩溃；需要验证 `Docker image` 工作流的 amd64、arm64 构建与 manifest 合并都能成功，`ghcr.io/2086316487/infinite-canvas:latest` 可被 Docker Compose 拉取。
+
 
 - 新增当前生产链路文档，记录 Netlify 前端、Render Go API、Supabase Postgres 和后续 Supabase Storage 的真实职责边界，并把部署文档导航接入该页面；应用 GitHub 按钮、版本检查地址、文档站 GitHub 配置、在线体验链接、快速开始 clone 地址和 Render 部署链接已改为 fork `2086316487/infinite-canvas`，需要验证文档站导航、在线体验入口、应用右上角 GitHub 按钮和版本弹窗都不再指向上游演示链路。
 - 远程模式图片生成改为异步任务：后端新增 `image_tasks` 表和 `/api/v1/image-tasks/generations`、`/api/v1/image-tasks/edits`、`/api/v1/image-tasks/:id`、`/api/v1/image-tasks` 接口；图片工作台创建任务后改为轮询结果，批量创建时会保留已成功创建的任务并统计创建失败数量，单张失败重试只重新创建 1 个任务，画布图片节点生成/重试/局部编辑/角度生成会保存 `imageTaskId`/`imageTaskMode` 并在刷新后继续恢复未完成任务，画布助手远程图片消息会保存 `imageTasks`/`imagePrompt` 并在刷新后继续轮询；任务队列现已增加 `locked_by`、`locked_until`、`attempts`、`next_run_at` 租约字段，并对短暂网络错误、429、5xx 做有限自动重试；成功结果会转存为站内稳定图片 URL（`/api/media/generated-images/:id`）；同时新增 `APP_ROLE=all|web|worker` 角色启动方式，需要验证文生图、图生图、失败返还、页面刷新恢复、结果图片刷新后仍可访问，以及 Render 服务重启后 `pending/running` 任务自动恢复、独立 worker 运行和重试节奏。当前还补了任务结果恢复清单，清单和本地图片文件会先写临时文件再替换，且清单存放在非公开目录、公开媒体接口只服务图片文件；极端情况下实例重启后可继续接回已落盘但尚未写回数据库的结果，也需要验证恢复后不会重复生成图片文件，并验证恢复链本地落盘短暂失败时会进入有限重试或失败终态、不长期停在 `running`。
