@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { BookOpen, Home, ImageIcon, Images, List, Menu, MessageSquare, Music2, Plus, Redo2, Settings2, Trash2, Undo2, Upload, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 
-import { createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, requestImageQuestion, type ImageGenerationTask } from "@/services/api/image";
+import { IMAGE_TASK_POLL_INTERVAL_MS, IMAGE_TASK_POLL_MAX_ATTEMPTS, createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, requestImageQuestion, type ImageGenerationTask } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
@@ -2345,7 +2345,7 @@ function InfiniteCanvasPage() {
                     mode: node.metadata?.imageTaskMode || node.metadata?.generationType || "generation",
                     model,
                 };
-                for (let attempt = 0; attempt < 120; attempt += 1) {
+                for (let attempt = 0; attempt < IMAGE_TASK_POLL_MAX_ATTEMPTS; attempt += 1) {
                     const state = await pollImageGenerationTask(taskConfig, task);
                     if (state.status === "completed") {
                         const image = state.images[0];
@@ -2384,8 +2384,8 @@ function InfiniteCanvasPage() {
                         return true;
                     }
                     if (state.status === "failed") throw new Error(state.error);
-                    if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
-                    await new Promise((resolve) => setTimeout(resolve, 2500));
+                    if (attempt === IMAGE_TASK_POLL_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
+                    await new Promise((resolve) => setTimeout(resolve, IMAGE_TASK_POLL_INTERVAL_MS));
                 }
             } catch (error) {
                 const errorDetails = error instanceof Error ? error.message : "生成失败";

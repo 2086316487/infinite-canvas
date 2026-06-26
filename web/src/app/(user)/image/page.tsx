@@ -16,7 +16,7 @@ import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, type ImageGenerationTask } from "@/services/api/image";
+import { IMAGE_TASK_POLL_INTERVAL_MS, IMAGE_TASK_POLL_MAX_ATTEMPTS, createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, type ImageGenerationTask } from "@/services/api/image";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { ReferenceImage } from "@/types/image";
@@ -408,7 +408,7 @@ export default function ImagePage() {
     const pollImageTaskSlot = async (taskConfig: AiConfig, task: ImageGenerationTask, index: number, shouldBindResults: () => boolean): Promise<GeneratedImage> => {
         const itemStartedAt = performance.now();
         try {
-            for (let attempt = 0; attempt < 120; attempt += 1) {
+            for (let attempt = 0; attempt < IMAGE_TASK_POLL_MAX_ATTEMPTS; attempt += 1) {
                 const state = await pollImageGenerationTask(taskConfig, task);
                 if (state.status === "completed") {
                     const image = state.images[0];
@@ -429,8 +429,8 @@ export default function ImagePage() {
                     return nextImage;
                 }
                 if (state.status === "failed") throw new Error(state.error);
-                if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
-                await delay(2500);
+                if (attempt === IMAGE_TASK_POLL_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
+                await delay(IMAGE_TASK_POLL_INTERVAL_MS);
             }
             throw new Error("图片生成超时，请稍后重试");
         } catch (error) {

@@ -12,7 +12,7 @@ import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { nanoid } from "nanoid";
 import { cn } from "@/lib/utils";
-import { createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage, type ImageGenerationTask } from "@/services/api/image";
+import { IMAGE_TASK_POLL_INTERVAL_MS, IMAGE_TASK_POLL_MAX_ATTEMPTS, createImageEditTask, createImageGenerationTask, pollImageGenerationTask, requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage, type ImageGenerationTask } from "@/services/api/image";
 import { imageToDataUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -739,7 +739,7 @@ async function buildChatMessages(messages: CanvasAssistantMessage[]): Promise<Ch
 }
 
 async function waitForAssistantImageTask(config: AiConfig, task: CanvasAssistantImageTask): Promise<{ id: string; dataUrl: string }> {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+    for (let attempt = 0; attempt < IMAGE_TASK_POLL_MAX_ATTEMPTS; attempt += 1) {
         const state = await pollImageGenerationTask(config, task);
         if (state.status === "completed") {
             const image = state.images[0];
@@ -747,8 +747,8 @@ async function waitForAssistantImageTask(config: AiConfig, task: CanvasAssistant
             return image;
         }
         if (state.status === "failed") throw new Error(state.error);
-        if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
-        await delay(2500);
+        if (attempt === IMAGE_TASK_POLL_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
+        await delay(IMAGE_TASK_POLL_INTERVAL_MS);
     }
     throw new Error("图片生成超时，请稍后重试");
 }

@@ -207,6 +207,7 @@ data/generated-image-task-recovery/
 
 - 不要对不确定的生产环境直接发起真实图片或视频生成，避免消耗上游额度。
 - 可以先测健康检查、公开配置、登录态、任务列表和参数校验。
+- 如果前端显示“图片生成超时”，先用任务 ID 查询 `/api/v1/image-tasks/:id`；若后端仍是 `running` 且 `updatedAt` 持续刷新，说明是前端本地等待窗口先到，不代表后端任务已经失败。
 - 根路径 404 不是后端失败；Render Go API 看 `/api/health`。
 - CORS 预检失败通常说明 Render 没放行 Netlify 域名。
 - 如果日志里出现 `github.com/basketikun/infinite-canvas/...`，这通常是 Go module/import path，不等于部署源是上游仓库；部署源要看 Render 绑定仓库和 checkout commit。

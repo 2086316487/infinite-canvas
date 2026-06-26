@@ -58,6 +58,8 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+export const IMAGE_TASK_POLL_INTERVAL_MS = 2500;
+export const IMAGE_TASK_POLL_MAX_ATTEMPTS = 900;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -343,12 +345,12 @@ export async function pollImageGenerationTask(config: AiConfig, task: ImageGener
 }
 
 export async function waitForImageGenerationTask(config: AiConfig, task: ImageGenerationTask): Promise<GeneratedImageApiResult[]> {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+    for (let attempt = 0; attempt < IMAGE_TASK_POLL_MAX_ATTEMPTS; attempt += 1) {
         const state = await pollImageGenerationTask(config, task);
         if (state.status === "completed") return state.images;
         if (state.status === "failed") throw new Error(state.error);
-        if (attempt === 119) throw new Error("Image generation timed out, please try again later");
-        await delay(2500);
+        if (attempt === IMAGE_TASK_POLL_MAX_ATTEMPTS - 1) throw new Error("Image generation timed out, please try again later");
+        await delay(IMAGE_TASK_POLL_INTERVAL_MS);
     }
     throw new Error("Image generation timed out, please try again later");
 }
