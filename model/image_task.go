@@ -40,7 +40,8 @@ type ImageTask struct {
 	Outputs        []ImageTaskOutput `json:"outputs" gorm:"serializer:json"`
 	LockedBy       string            `json:"-" gorm:"index"`
 	LockedUntil    string            `json:"-" gorm:"index"`
-	Attempts       int               `json:"-"`
+	Attempts       int               `json:"attempts,omitempty"`
+	MaxAttempts    int               `json:"maxAttempts,omitempty" gorm:"-"`
 	NextRunAt      string            `json:"-" gorm:"index"`
 	StartedAt      string            `json:"startedAt,omitempty"`
 	FinishedAt     string            `json:"finishedAt,omitempty"`

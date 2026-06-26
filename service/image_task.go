@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,6 +53,11 @@ var (
 type imageTaskExecutionError struct {
 	message   string
 	retryable bool
+}
+
+type imageTaskExecutionResult struct {
+	task model.ImageTask
+	err  error
 }
 
 func (err imageTaskExecutionError) Error() string {
@@ -244,8 +250,15 @@ func RunImageTask(id string) {
 		}
 	}
 
-	if err := executeImageTask(&task); err != nil {
-		handleImageTaskError(task, err)
+	if task.Attempts > imageTaskMaxAttempts {
+		handleImageTaskError(task, newImageTaskExecutionError("AI request timed out", false))
+		return
+	}
+
+	var execErr error
+	task, execErr = executeImageTaskWithTimeout(task)
+	if execErr != nil {
+		handleImageTaskError(task, execErr)
 		return
 	}
 
@@ -273,16 +286,31 @@ func RunImageTask(id string) {
 	}
 }
 
-func executeImageTask(task *model.ImageTask) error {
-	started := time.Now()
+func executeImageTaskWithTimeout(task model.ImageTask) (model.ImageTask, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), imageTaskHTTPTimeout)
+	defer cancel()
+	resultCh := make(chan imageTaskExecutionResult, 1)
+	go func() {
+		nextTask := task
+		resultCh <- imageTaskExecutionResult{task: nextTask, err: executeImageTask(ctx, &nextTask)}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.task, result.err
+	case <-ctx.Done():
+		return task, newImageTaskExecutionError("AI request timed out", true)
+	}
+}
 
+func executeImageTask(ctx context.Context, task *model.ImageTask) error {
+	started := time.Now()
 	channel, err := SelectModelChannel(task.Model)
 	if err != nil {
 		return err
 	}
 	upstreamPath := resolveImageTaskPath(channel.BaseURL, task.Model, task.UpstreamPath)
 
-	request, err := http.NewRequest(http.MethodPost, BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(task.RequestBody))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(task.RequestBody))
 	if err != nil {
 		return err
 	}
@@ -295,6 +323,9 @@ func executeImageTask(task *model.ImageTask) error {
 	response, err := imageTaskHTTPClient.Do(request)
 	if err != nil {
 		log.Printf("image task request failed: id=%s duration=%s err=%v", task.ID, time.Since(started).Round(time.Millisecond), err)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return newImageTaskExecutionError("AI request timed out", true)
+		}
 		return newImageTaskExecutionError("AI request failed", true)
 	}
 	defer response.Body.Close()
@@ -682,6 +713,7 @@ func sanitizeImageTask(task model.ImageTask) model.ImageTask {
 	task.LockedBy = ""
 	task.LockedUntil = ""
 	task.NextRunAt = ""
+	task.MaxAttempts = imageTaskMaxAttempts
 	return task
 }
 

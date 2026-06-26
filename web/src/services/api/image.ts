@@ -31,13 +31,18 @@ type ImageTaskResponse = {
     model?: string;
     status?: ImageTaskStatus;
     error?: string;
+    attempts?: number;
+    maxAttempts?: number;
     outputs?: ImageTaskOutput[];
 };
 type ImageTaskCreateResponse = { id: string; status?: ImageTaskStatus };
 
 export type GeneratedImageApiResult = { id: string; dataUrl: string };
 export type ImageGenerationTask = { id: string; mode: "generation" | "edit"; model: string; status?: ImageTaskStatus };
-export type ImageGenerationTaskState = { status: "pending" } | { status: "completed"; images: GeneratedImageApiResult[] } | { status: "failed"; error: string };
+export type ImageGenerationTaskState =
+    | { status: "pending"; attempts?: number; maxAttempts?: number }
+    | { status: "completed"; images: GeneratedImageApiResult[] }
+    | { status: "failed"; error: string; attempts?: number; maxAttempts?: number };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -336,9 +341,9 @@ export async function pollImageGenerationTask(config: AiConfig, task: ImageGener
             return { status: "completed", images: parseImageTaskPayload(payload) };
         }
         if (payload.status === "failed" || payload.status === "cancelled") {
-            return { status: "failed", error: payload.error || "Image generation failed" };
+            return { status: "failed", error: payload.error || "Image generation failed", attempts: payload.attempts, maxAttempts: payload.maxAttempts };
         }
-        return { status: "pending" };
+        return { status: "pending", attempts: payload.attempts, maxAttempts: payload.maxAttempts };
     } catch (error) {
         throw new Error(readAxiosError(error, "Image task polling failed"));
     }
