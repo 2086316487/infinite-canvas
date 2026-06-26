@@ -191,14 +191,15 @@ data/generated-image-task-recovery/
 
 ## 当前已知状态
 
-- Render API 最新已手动部署到 `1a7e0fa`，Dashboard 显示 Deploy `dep-d8v4q2urnols73fuovl0` 为 Live；部署日志确认 checkout fork `2086316487/infinite-canvas` 的 `main` 分支提交 `1a7e0faaa8f5f1e3ca764b1b84725fbd6ccac256`。
-- Netlify 前端已自动发布到 `main@1a7e0fa`，状态为 Published；方案三相关前端和 Render API 当前已对齐到同一提交。
+- Render API 最新已手动部署到 `dfe821a`，Dashboard 显示 Deploy `dep-d8v58n8js32c738moq00` 为 Live；部署日志确认 checkout fork `2086316487/infinite-canvas` 的 `main` 分支提交 `dfe821aec074c7a12a4c57e5baea695dcd3f849b`。
+- Netlify 前端方案三代码已自动发布到 `main@1a7e0fa`，状态为 Published；后续 `dfe821a` 只改 Render API 的成功结果写库和图片结果解析，不含前端代码变更。
 - Netlify 正式域名为 `https://infinite-canvas-2086316487.netlify.app`，部署源确认为 `2086316487/infinite-canvas` 的 `main` 分支。
 - 从 Netlify 页面源站直接请求 Render API 已验证通过：`/api/health`、`/api/settings` 返回 `200`。
 - 从 Netlify 页面源站请求 `/api/v1/image-tasks` 返回业务层未登录响应 `{ code: 1, msg: "未登录或权限不足" }`，说明方案三相关接口没有被 CORS 预检拦住。
 - 从 Netlify 页面源站 POST `/api/v1/image-tasks/generations` 在未登录态返回业务层未登录响应 `{ code: 1, msg: "未登录或权限不足" }`，未触发真实生成。
 - 从 Netlify 页面源站 OPTIONS `/api/v1/image-tasks/generations` 返回 `204`，`Access-Control-Allow-Origin` 正确放行 `https://infinite-canvas-2086316487.netlify.app`。
-- 当前浏览器里的 Netlify 登录态为空，暂未查询生产排查任务 `imgtask-42e9e52d-e346-480a-b65a-2f743e09de9e` 的登录态详情，也未发起新的真实生图请求。
+- 登录态下已查询生产排查任务 `imgtask-42e9e52d-e346-480a-b65a-2f743e09de9e`：该任务已进入 `failed` 终态，`attempts=32`、`maxAttempts=3`、`refunded=true`，复查后不会继续增加 attempts。
+- 真实测试任务 `imgtask-dcbb0eab-a6d9-40af-9398-97a989c69c92` 证明上游约 30 秒成功返回，Render 日志已出现结果 URL；失败点是 `outputs` 用 map 更新时未走 GORM JSON serializer，Postgres 报 `could not determine data type of parameter $6`。`dfe821a` 已修复为结构体更新并优先保存上游 http(s) URL；由于部署重启后旧容器 recovery 文件不可用，该测试任务最终由新调度器收敛为 `failed` 且 `refunded=true`，需要在 `dfe821a` 之后另起新任务验证成功写回。
 - 生产排查任务 `imgtask-15d2ffef-caae-42e0-afb1-ee69958a2205` 在部署 `5c2cbf8` 后已由长期 `running` 进入 `failed` 终态，错误为 `AI request timed out`，接口已返回 `attempts` 和 `maxAttempts` 进度字段。
 - 生产排查任务 `imgtask-42e9e52d-e346-480a-b65a-2f743e09de9e` 对应中转站记录已在 30 秒左右成功并扣费，但系统侧长期 `running` 且 attempts 超过 3，判断不是单纯超时窗口问题。后续修复重点是：上游成功后的 http(s) 结果 URL 不再由 Render 二次下载；任务执行结果必须正确带回 outputs；超出 `maxAttempts` 的旧任务若已有 recovery 清单则优先恢复成功结果，否则由调度器收敛为失败并返还积分。
 - Netlify 生产站已验证首页、登录页、生图工作台和画布库可打开；画布库本地新建画布能写入浏览器本地列表。
