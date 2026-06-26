@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [优化] 清理 README、Docker Compose 和文档站里残留的上游仓库/原演示站引用，并让应用 Docker 镜像工作流同步发布 `latest` 标签。
+
 + [优化] 补充当前生产部署链路文档，并将应用和文档外链对齐到 fork 仓库与 Netlify 正式站点。
 
 ## v0.2.6 - 2026-06-25
