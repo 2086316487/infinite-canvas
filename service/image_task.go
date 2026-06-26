@@ -265,16 +265,7 @@ func runImageTask(id string, claimMaxAttempts int) {
 				return
 			}
 			finishedAt := now()
-			ok, saveErr := repository.UpdateImageTaskByOwner(task.ID, imageTaskWorkerID, map[string]any{
-				"status":        model.ImageTaskStatusSucceeded,
-				"error_message": "",
-				"outputs":       outputs,
-				"finished_at":   finishedAt,
-				"locked_by":     "",
-				"locked_until":  "",
-				"next_run_at":   "",
-				"updated_at":    finishedAt,
-			})
+			ok, saveErr := repository.MarkImageTaskSucceededByOwner(task.ID, imageTaskWorkerID, outputs, finishedAt)
 			if saveErr != nil {
 				log.Printf("image task recovery save failed: id=%s err=%v", id, saveErr)
 				return
@@ -301,16 +292,7 @@ func runImageTask(id string, claimMaxAttempts int) {
 	}
 
 	finishedAt := now()
-	ok, err := repository.UpdateImageTaskByOwner(task.ID, imageTaskWorkerID, map[string]any{
-		"status":        model.ImageTaskStatusSucceeded,
-		"error_message": "",
-		"outputs":       task.Outputs,
-		"finished_at":   finishedAt,
-		"locked_by":     "",
-		"locked_until":  "",
-		"next_run_at":   "",
-		"updated_at":    finishedAt,
-	})
+	ok, err := repository.MarkImageTaskSucceededByOwner(task.ID, imageTaskWorkerID, task.Outputs, finishedAt)
 	if err != nil {
 		log.Printf("image task success state save failed: id=%s err=%v", id, err)
 		return
@@ -575,23 +557,20 @@ func resolveImageDataURLsForTask(value any, depth int) []string {
 		return result
 	case map[string]any:
 		directFields := []string{
-			readImageTaskField(typed["b64_json"]),
 			readImageTaskField(typed["url"]),
 			readImageTaskField(typed["image_url"]),
 			readImageTaskField(typed["imageUrl"]),
 			readImageTaskField(typed["image"]),
 			readImageTaskField(typed["base64"]),
 			readImageTaskField(typed["b64"]),
+			readImageTaskField(typed["b64_json"]),
 		}
-		result := []string{}
 		for _, item := range directFields {
 			if item != "" {
-				result = append(result, item)
+				return []string{item}
 			}
 		}
-		if len(result) > 0 {
-			return result
-		}
+		result := []string{}
 		for _, key := range []string{"data", "images", "image_urls", "imageUrls", "output", "outputs", "result", "results", "artifacts", "items", "content"} {
 			result = append(result, resolveImageDataURLsForTask(typed[key], depth+1)...)
 		}

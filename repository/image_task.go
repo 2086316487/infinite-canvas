@@ -168,6 +168,28 @@ func UpdateImageTaskByOwner(id string, workerID string, values map[string]any) (
 	return result.RowsAffected > 0, result.Error
 }
 
+func MarkImageTaskSucceededByOwner(id string, workerID string, outputs []model.ImageTaskOutput, finishedAt string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	values := model.ImageTask{
+		Status:       model.ImageTaskStatusSucceeded,
+		ErrorMessage: "",
+		Outputs:      outputs,
+		FinishedAt:   finishedAt,
+		LockedBy:     "",
+		LockedUntil:  "",
+		NextRunAt:    "",
+		UpdatedAt:    finishedAt,
+	}
+	result := db.Model(&model.ImageTask{}).
+		Where("id = ? AND locked_by = ?", id, workerID).
+		Select("status", "error_message", "outputs", "finished_at", "locked_by", "locked_until", "next_run_at", "updated_at").
+		Updates(values)
+	return result.RowsAffected > 0, result.Error
+}
+
 func MarkImageTaskRefunded(id string) error {
 	db, err := DB()
 	if err != nil {
