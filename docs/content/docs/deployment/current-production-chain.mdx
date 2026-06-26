@@ -94,6 +94,7 @@ docs.canvas.best -> 9811193a67699595.vercel-dns-017.com
 - 如果新文档已经合入 fork `main`，但 `docs.canvas.best/docs/...` 仍然 404，需要进入 Vercel 项目确认绑定仓库、分支、根目录、构建命令和生产域名。
 - 部署文档站时应以 Vercel Dashboard 的项目配置为准；如果当前 Vercel 团队的 Domains 列表没有 `docs.canvas.best`，且直达 `/~/domains/docs.canvas.best` 返回 Dashboard 404，说明当前登录态不能管理该域名，不要在该团队里继续乱建项目。
 - 当前已核对 `2086316487's projects` 团队只看到 `pitch-ai` 和 `nolebase-template` 两个项目，且它们的域名页没有 `docs.canvas.best`；要更新 `docs.canvas.best`，需要切到拥有该域名的 Vercel 账号或团队，或者决定把文档站迁移到新的可控域名。
+- 当前决定先跳过 `docs.canvas.best` 文档站部署；它不是 Netlify 前端、Render API、Supabase 数据库这条主生产链路的阻塞项。
 
 ## 方案三上线影响
 

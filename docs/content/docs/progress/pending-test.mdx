@@ -8,7 +8,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 - 应用 Docker 镜像构建阶段改为用 Node 直接执行 Next.js build，绕开 arm64 runner 中 `bun run build` 触发的 Bun 崩溃；需要验证 `Docker image` 工作流的 amd64、arm64 构建与 manifest 合并都能成功，`ghcr.io/2086316487/infinite-canvas:latest` 可被 Docker Compose 拉取。
 
-- 生产链路文档补充 `docs.canvas.best` 实际由 Vercel 承载，GHCR 文档镜像不会自动更新该域名；当前 `2086316487's projects` 团队未列出该域名，且直达域名管理页返回 Vercel Dashboard 404。需要切到拥有 `docs.canvas.best` 的 Vercel 账号或团队后，再验证项目绑定仓库、分支、根目录、构建命令和生产域名，并重新部署文档站使新文档页面不再 404。
+- 生产链路文档补充 `docs.canvas.best` 实际由 Vercel 承载，GHCR 文档镜像不会自动更新该域名；当前已决定先跳过文档站线上部署，后续有条件再处理，不作为方案三主生产链路的阻塞项。
 
 
 - 新增当前生产链路文档，记录 Netlify 前端、Render Go API、Supabase Postgres 和后续 Supabase Storage 的真实职责边界，并把部署文档导航接入该页面；应用 GitHub 按钮、版本检查地址、文档站 GitHub 配置、在线体验链接、快速开始 clone 地址和 Render 部署链接已改为 fork `2086316487/infinite-canvas`，需要验证文档站导航、在线体验入口、应用右上角 GitHub 按钮和版本弹窗都不再指向上游演示链路。
