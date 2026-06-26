@@ -79,6 +79,21 @@ NEXT_PUBLIC_DOC_URL=https://docs.canvas.best
 - 实际 Netlify 站点 URL 需要以 Netlify Dashboard 为准，并同步写入 Render 的 `CORS_ALLOWED_ORIGINS`。
 - 当前仓库未发现 `netlify.toml`，Netlify 的站点、构建命令、发布目录和生产环境变量需要以 Dashboard 为准。
 
+## 文档站 Vercel
+
+`docs.canvas.best` 当前解析到 Vercel DNS：
+
+```text
+docs.canvas.best -> 9811193a67699595.vercel-dns-017.com
+```
+
+文档站不要和 Netlify web 前端、Render Go API 或 GHCR 文档镜像混为一谈：
+
+- `docs.canvas.best` 当前由 Vercel 承载。
+- `Docs Docker image` 工作流只会发布 `ghcr.io/2086316487/infinite-canvas-docs:latest`，不会自动更新 Vercel 上的 `docs.canvas.best`。
+- 如果新文档已经合入 fork `main`，但 `docs.canvas.best/docs/...` 仍然 404，需要进入 Vercel 项目确认绑定仓库、分支、根目录、构建命令和生产域名。
+- 部署文档站时应以 Vercel Dashboard 的项目配置为准；当前浏览器未登录 Vercel 时，无法安全确认项目名和部署设置。
+
 ## 方案三上线影响
 
 方案三不是单纯后端改动，部署和配置需要同时核对这些位置：

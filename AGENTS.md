@@ -89,6 +89,7 @@
 ## 项目注意事项
 
 - 当前线上部署源是 fork 仓库 `2086316487/infinite-canvas`，不要把上游 `basketikun/infinite-canvas` 或原演示站 `https://infinite-canvas-cpco.onrender.com` 当成部署、验收或排障对象；生产链路以 `docs/content/docs/deployment/current-production-chain.mdx` 为准。
+- `docs.canvas.best` 当前由 Vercel 承载，不会因为 Netlify 前端部署或 GHCR 文档镜像构建成功而自动更新；部署文档站前先进入 Vercel 项目核对绑定仓库、分支、根目录和生产域名。
 - 当前画布项目和“我的素材”主要保存在浏览器本地，不要在文档中误写成已支持云同步。
 - 当前 AI API Key 存在浏览器本地，并由前端直接请求 OpenAI 兼容接口；涉及安全说明时要写清楚。
 - Docker 静态资源路径目前仍是待办项，文档中不要过度承诺生产部署已经完全验证。

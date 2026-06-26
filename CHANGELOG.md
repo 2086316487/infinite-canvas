@@ -4,6 +4,7 @@
 
 + [优化] 清理 README、Docker Compose 和文档站里残留的上游仓库/原演示站引用，并让应用 Docker 镜像工作流同步发布 `latest` 标签。
 + [修复] 应用 Docker 镜像构建阶段改为用 Node 直接执行 Next.js build，避免 arm64 runner 中 Bun 运行构建脚本崩溃。
++ [优化] 记录 `docs.canvas.best` 实际由 Vercel 承载，避免把 Netlify 前端或 GHCR 文档镜像误认为文档站线上部署。
 
 + [优化] 补充当前生产部署链路文档，并将应用和文档外链对齐到 fork 仓库与 Netlify 正式站点。
 
