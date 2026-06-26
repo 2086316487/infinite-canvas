@@ -2350,7 +2350,7 @@ function InfiniteCanvasPage() {
                     if (state.status === "completed") {
                         const image = state.images[0];
                         if (!image) throw new Error("接口没有返回图片");
-                        const uploaded = await uploadImage(image.dataUrl);
+                        const uploaded = await storeRemoteCanvasImage(image.dataUrl);
                         const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                         const imageSize = fitNodeSize(uploaded.width, uploaded.height, node.width || imageConfig.width, node.height || imageConfig.height);
                         setNodes((prev) => {
@@ -3046,6 +3046,15 @@ function audioExtension(mimeType?: string) {
 
 function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
     return { content: image.url, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType };
+}
+
+async function storeRemoteCanvasImage(dataUrl: string): Promise<UploadedImage> {
+    try {
+        return await uploadImage(dataUrl);
+    } catch {
+        const meta = await readImageMeta(dataUrl);
+        return { url: dataUrl, storageKey: "", width: meta.width, height: meta.height, bytes: dataUrl.startsWith("data:") ? getDataUrlByteSize(dataUrl) : 0, mimeType: meta.mimeType || "image/png" };
+    }
 }
 
 function syncBatchRootForChild(nodes: CanvasNodeData[], childId: string) {

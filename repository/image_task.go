@@ -54,7 +54,7 @@ func ListImageTasksByStatus(statuses ...model.ImageTaskStatus) ([]model.ImageTas
 	return items, err
 }
 
-func ListDueImageTaskIDs(limit int, dueBefore string) ([]string, error) {
+func ListDueImageTaskIDs(limit int, dueBefore string, maxAttempts int) ([]string, error) {
 	db, err := DB()
 	if err != nil {
 		return nil, err
@@ -65,6 +65,7 @@ func ListDueImageTaskIDs(limit int, dueBefore string) ([]string, error) {
 	var items []model.ImageTask
 	err = db.Select("id").
 		Where("status IN ?", []model.ImageTaskStatus{model.ImageTaskStatusPending, model.ImageTaskStatusRunning}).
+		Where("COALESCE(attempts, 0) < ?", maxAttempts).
 		Where("(next_run_at = '' OR next_run_at IS NULL OR next_run_at <= ?)", dueBefore).
 		Where("(locked_until = '' OR locked_until IS NULL OR locked_until <= ?)", dueBefore).
 		Order("created_at asc").
@@ -80,7 +81,7 @@ func ListDueImageTaskIDs(limit int, dueBefore string) ([]string, error) {
 	return ids, nil
 }
 
-func ClaimImageTask(id string, workerID string, lockedUntil string, currentTime string) (bool, error) {
+func ClaimImageTask(id string, workerID string, lockedUntil string, currentTime string, maxAttempts int) (bool, error) {
 	db, err := DB()
 	if err != nil {
 		return false, err
@@ -88,6 +89,7 @@ func ClaimImageTask(id string, workerID string, lockedUntil string, currentTime 
 	result := db.Model(&model.ImageTask{}).
 		Where("id = ?", id).
 		Where("status IN ?", []model.ImageTaskStatus{model.ImageTaskStatusPending, model.ImageTaskStatusRunning}).
+		Where("COALESCE(attempts, 0) < ?", maxAttempts).
 		Where("(next_run_at = '' OR next_run_at IS NULL OR next_run_at <= ?)", currentTime).
 		Where("(locked_until = '' OR locked_until IS NULL OR locked_until <= ?)", currentTime).
 		Updates(map[string]any{
@@ -97,6 +99,46 @@ func ClaimImageTask(id string, workerID string, lockedUntil string, currentTime 
 			"attempts":     gorm.Expr("COALESCE(attempts, 0) + 1"),
 			"started_at":   gorm.Expr("CASE WHEN started_at = '' OR started_at IS NULL THEN ? ELSE started_at END", currentTime),
 			"error_message": "",
+			"next_run_at":   "",
+			"updated_at":    currentTime,
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
+func ListExpiredImageTasksByAttempts(limit int, currentTime string, maxAttempts int) ([]model.ImageTask, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	var items []model.ImageTask
+	err = db.Where("status IN ?", []model.ImageTaskStatus{model.ImageTaskStatusPending, model.ImageTaskStatusRunning}).
+		Where("COALESCE(attempts, 0) >= ?", maxAttempts).
+		Where("(locked_until = '' OR locked_until IS NULL OR locked_until <= ?)", currentTime).
+		Order("created_at asc").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
+}
+
+func FailExpiredImageTaskByAttempts(id string, currentTime string, maxAttempts int, errorMessage string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	result := db.Model(&model.ImageTask{}).
+		Where("id = ?", id).
+		Where("status IN ?", []model.ImageTaskStatus{model.ImageTaskStatusPending, model.ImageTaskStatusRunning}).
+		Where("COALESCE(attempts, 0) >= ?", maxAttempts).
+		Where("(locked_until = '' OR locked_until IS NULL OR locked_until <= ?)", currentTime).
+		Updates(map[string]any{
+			"status":        model.ImageTaskStatusFailed,
+			"error_message": errorMessage,
+			"finished_at":   currentTime,
+			"locked_by":     "",
+			"locked_until":  "",
 			"next_run_at":   "",
 			"updated_at":    currentTime,
 		})

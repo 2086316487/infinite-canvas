@@ -48,9 +48,6 @@ func persistImageTaskOutputs(taskID string, outputs []model.ImageTaskOutput) ([]
 	if len(outputs) == 0 {
 		return outputs, nil
 	}
-	if err := os.MkdirAll(generatedImageTaskDir(), 0755); err != nil {
-		return nil, safeMessageError{message: "Save generated image failed"}
-	}
 	items := make([]model.ImageTaskOutput, 0, len(outputs))
 	for index, output := range outputs {
 		item, err := persistImageTaskOutput(taskID, index, output)
@@ -73,6 +70,17 @@ func persistImageTaskOutput(taskID string, index int, output model.ImageTaskOutp
 	if isGeneratedImageTaskURL(source) {
 		output.DataURL = ""
 		return output, nil
+	}
+	if isRemoteImageTaskURL(source) {
+		output.URL = source
+		output.DataURL = ""
+		if output.MimeType == "" {
+			output.MimeType = generatedImageTaskMimeTypeByExt(generatedImageTaskPathExt(source))
+		}
+		return output, nil
+	}
+	if err := os.MkdirAll(generatedImageTaskDir(), 0755); err != nil {
+		return output, safeMessageError{message: "Save generated image failed"}
 	}
 
 	data, mimeType, err := readImageTaskOutputBytes(source, output.MimeType)
@@ -248,6 +256,11 @@ func generatedImageTaskMimeTypeByExt(ext string) string {
 
 func isGeneratedImageTaskURL(value string) bool {
 	return strings.HasPrefix(strings.TrimSpace(value), generatedImageTaskURLPrefix)
+}
+
+func isRemoteImageTaskURL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func generatedImageTaskDir() string {

@@ -168,12 +168,46 @@ func RunImageTaskScheduler() error {
 }
 
 func ResumePendingImageTasks() error {
-	ids, err := repository.ListDueImageTaskIDs(imageTaskDispatchLimit, now())
+	currentTime := now()
+	if err := failExpiredImageTasksByAttempts(currentTime); err != nil {
+		return err
+	}
+
+	ids, err := repository.ListDueImageTaskIDs(imageTaskDispatchLimit, currentTime, imageTaskMaxAttempts)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
 		go RunImageTask(id)
+	}
+	return nil
+}
+
+func failExpiredImageTasksByAttempts(currentTime string) error {
+	tasks, err := repository.ListExpiredImageTasksByAttempts(imageTaskDispatchLimit, currentTime, imageTaskMaxAttempts)
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		_, hasRecovery, loadErr := loadImageTaskRecovery(task.ID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if hasRecovery {
+			log.Printf("image task stale attempts recovery scheduled: id=%s attempts=%d", task.ID, task.Attempts)
+			go runImageTask(task.ID, task.Attempts+1)
+			continue
+		}
+
+		ok, saveErr := repository.FailExpiredImageTaskByAttempts(task.ID, currentTime, imageTaskMaxAttempts, "AI request timed out")
+		if saveErr != nil {
+			return saveErr
+		}
+		if !ok {
+			continue
+		}
+		log.Printf("image task stale attempts failed: id=%s attempts=%d", task.ID, task.Attempts)
+		refundImageTaskCredits(task)
 	}
 	return nil
 }
@@ -189,12 +223,16 @@ func runImageTaskSchedulerLoop() {
 }
 
 func RunImageTask(id string) {
+	runImageTask(id, imageTaskMaxAttempts)
+}
+
+func runImageTask(id string, claimMaxAttempts int) {
 	if _, loaded := imageTaskRunner.LoadOrStore(id, struct{}{}); loaded {
 		return
 	}
 	defer imageTaskRunner.Delete(id)
 
-	task, claimed, err := claimImageTask(id)
+	task, claimed, err := claimImageTask(id, claimMaxAttempts)
 	if err != nil {
 		log.Printf("image task claim failed: id=%s err=%v", id, err)
 		return
@@ -292,7 +330,8 @@ func executeImageTaskWithTimeout(task model.ImageTask) (model.ImageTask, error) 
 	resultCh := make(chan imageTaskExecutionResult, 1)
 	go func() {
 		nextTask := task
-		resultCh <- imageTaskExecutionResult{task: nextTask, err: executeImageTask(ctx, &nextTask)}
+		err := executeImageTask(ctx, &nextTask)
+		resultCh <- imageTaskExecutionResult{task: nextTask, err: err}
 	}()
 	select {
 	case result := <-resultCh:
@@ -344,6 +383,7 @@ func executeImageTask(ctx context.Context, task *model.ImageTask) error {
 		log.Printf("image task parse failed: id=%s duration=%s err=%v", task.ID, time.Since(started).Round(time.Millisecond), err)
 		return err
 	}
+	log.Printf("image task upstream completed: id=%s status=%d outputs=%d bytes=%d duration=%s", task.ID, response.StatusCode, len(outputs), len(body), time.Since(started).Round(time.Millisecond))
 	if err := persistImageTaskRecovery(task.ID, body); err != nil {
 		log.Printf("image task recovery persist failed: id=%s duration=%s err=%v", task.ID, time.Since(started).Round(time.Millisecond), err)
 		return safeMessageError{message: "Save generated image failed"}
@@ -362,9 +402,9 @@ func resolveImageTaskPath(baseURL string, modelName string, path string) string 
 	return path
 }
 
-func claimImageTask(id string) (model.ImageTask, bool, error) {
+func claimImageTask(id string, maxAttempts int) (model.ImageTask, bool, error) {
 	lockUntil := time.Now().Add(imageTaskLeaseDuration).Format(time.RFC3339)
-	claimed, err := repository.ClaimImageTask(id, imageTaskWorkerID, lockUntil, now())
+	claimed, err := repository.ClaimImageTask(id, imageTaskWorkerID, lockUntil, now(), maxAttempts)
 	if err != nil || !claimed {
 		return model.ImageTask{}, claimed, err
 	}
@@ -449,11 +489,18 @@ func handleImageTaskError(task model.ImageTask, err error) {
 		return
 	}
 	if !task.Refunded {
-		if refundErr := RefundUserCredits(task.UserID, task.Model, task.Credits, task.UpstreamPath); refundErr != nil {
-			log.Printf("image task refund failed: id=%s err=%v", task.ID, refundErr)
-		} else if markErr := repository.MarkImageTaskRefunded(task.ID); markErr != nil {
-			log.Printf("image task refunded mark failed: id=%s err=%v", task.ID, markErr)
-		}
+		refundImageTaskCredits(task)
+	}
+}
+
+func refundImageTaskCredits(task model.ImageTask) {
+	if task.Refunded {
+		return
+	}
+	if refundErr := RefundUserCredits(task.UserID, task.Model, task.Credits, task.UpstreamPath); refundErr != nil {
+		log.Printf("image task refund failed: id=%s err=%v", task.ID, refundErr)
+	} else if markErr := repository.MarkImageTaskRefunded(task.ID); markErr != nil {
+		log.Printf("image task refunded mark failed: id=%s err=%v", task.ID, markErr)
 	}
 }
 

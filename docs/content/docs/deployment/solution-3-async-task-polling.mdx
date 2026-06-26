@@ -32,7 +32,7 @@ Browser -> Render Go API -> AI upstream -> Render writes large response -> Brows
   - `POST /api/v1/image-tasks/edits`
   - `GET /api/v1/image-tasks/{id}`
 - 后端创建任务后快速返回 task id，并由 goroutine 执行上游请求。
-- 上游成功后会把 URL 或 data URL 转存为服务端本地图片文件，并把站内稳定 URL 写回任务记录；同时会用临时文件替换方式把 recovery 清单写入非公开目录，方便在实例重启后接回尚未写回数据库的成功结果。
+- 上游成功后会先把原始响应写入 recovery 清单；data URL 结果会转存为服务端本地图片文件，http(s) 结果 URL 会直接写回任务记录，避免 Render 在上游已成功扣费后又因二次下载结果图而卡住或重试。
 - 上游失败后记录错误并尝试退还积分。
 - 后端增加基于数据库字段的租约队列：`locked_by`、`locked_until`、`attempts`、`next_run_at`。
 - Render 服务启动后会立即扫描可执行任务，并持续轮询领取到期的 `pending` / `running` 任务。
@@ -119,16 +119,16 @@ cancelled
 
 - 已支持把 worker 通过 `APP_ROLE=worker` 独立部署；但默认 `APP_ROLE=all` 仍是 Web/API 与 worker 同进程运行，若线上未拆分部署，服务重启或滚动发布时仍会共享同一实例生命周期。
 - 如果实例在上游已经成功但 recovery 清单尚未来得及写成时崩溃，极端情况下仍可能触发重复请求；清单写成后会优先恢复本地结果，不再重新请求上游，恢复链中的临时落盘失败也会进入同一套有限重试或失败终态。
-- 当前结果默认写入服务端本地 `data/generated-image-tasks/`，并以确定性文件名保存；如果部署环境没有持久化磁盘，或多实例之间不共享这份目录，重启、扩容或切实例后图片结果仍可能丢失或无法访问。
+- data URL 结果默认写入服务端本地 `data/generated-image-tasks/`，并以确定性文件名保存；http(s) 结果 URL 暂不经 Render 二次下载，直接保存到任务 outputs。没有对象存储前，本地文件仍可能在重启、扩容或切实例后丢失；远程 URL 也可能受上游有效期限制。
 - recovery 清单默认写入 `data/generated-image-task-recovery/`，不会通过 `/api/media/generated-images/:id` 对外提供；公开媒体接口只服务图片扩展名。
-- 结果尚未转存到对象存储，当前仍依赖单机持久化磁盘作为最终结果载体。
+- 结果尚未转存到对象存储，当前 data URL 结果仍依赖单机持久化磁盘，http(s) 结果依赖上游 URL 可访问性。
 
 ## 后续升级建议
 
 优先升级两点：
 
 1. 后端结果转存对象存储
-   - 当前已经会把结果落到本地稳定文件并补 recovery 清单，下一步可改为上传到 Supabase Storage 或其他对象存储。
+   - 当前 data URL 结果会落到本地稳定文件并补 recovery 清单，http(s) 结果会直接写回 outputs；下一步可统一上传到 Supabase Storage 或其他对象存储。
    - `outputs` 可保存稳定 storage URL 或 asset id。
    - 进一步解决多实例不共享本地磁盘、单机磁盘丢失和跨实例访问问题。
 
@@ -178,8 +178,8 @@ docker compose -f docker-compose.local.yml -f docker-compose.local.worker.yml up
 - 图片工作台、画布节点和画布助手消息能立即进入生成中状态。
 - 页面刷新后，未完成的图片任务可以继续轮询，画布助手消息可在完成后回填生成图片。
 - 上游成功但浏览器曾断开时，重新打开仍能查到 `succeeded` 和 outputs。
-- 任务完成后 `outputs` 返回的站内图片 URL（如 `/api/media/generated-images/...`）在刷新页面后仍可访问。
-- 模拟 recovery 清单已存在但数据库尚未写回时，worker 重启后应恢复结果；如果本地图片下载或落盘短暂失败，应按任务重试节奏重试，而不是长期停在 `running`。
+- 任务完成后 `outputs` 返回站内图片 URL（如 `/api/media/generated-images/...`）或上游 http(s) URL；刷新页面后仍应能展示，画布无法把远程 URL 保存到本地时也不应把已成功生成的任务标成失败。
+- 模拟 recovery 清单已存在但数据库尚未写回时，worker 重启后应恢复结果；如果 data URL 本地落盘短暂失败，应按任务重试节奏重试，而不是长期停在 `running`。
 - 短暂网络错误、429 或 5xx 不会立刻终态失败，而会在有限次数内自动重试。
 - 批量画布 root 能准确显示全部成功、部分成功、全部失败。
 - Render 日志可按 task id 串联排查 `start / succeeded / failed`。
