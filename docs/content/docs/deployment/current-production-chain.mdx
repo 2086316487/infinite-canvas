@@ -103,7 +103,7 @@ Repository: https://github.com/2086316487/infinite-canvas
 Branch: main
 ```
 
-当前已部署过的提交：
+当前 Render API 已部署过的提交：
 
 ```text
 Commit: 5c8d41f0916600e9cf2944b2ebfc570d52bc2393
@@ -175,10 +175,11 @@ data/generated-image-task-recovery/
 ## 当前已知状态
 
 - Render API 已手动部署到 `5c8d41f`，Dashboard 显示 `Deploy live for 5c8d41f`，并验证 `/api/health` 返回 `200 OK`。
-- Netlify 前端已重新部署到 `main@5c8d41f`，Deploy ID 为 `6a3e04a9376d4f68049da834`，状态为 Published。
+- Netlify 前端已重新部署并验证到 `main@60ced3e`，Deploy ID 为 `6a3e0c517475fc00085a0607`，状态为 Published；后续若文档或前端继续提交，以 Netlify Dashboard 的最新 Published 提交为准。
 - Netlify 正式域名为 `https://infinite-canvas-2086316487.netlify.app`，部署源确认为 `2086316487/infinite-canvas` 的 `main` 分支。
 - 从 Netlify 页面源站直接请求 Render API 已验证通过：`/api/health`、`/api/settings`、`/api/prompts` 返回 `200`。
 - 从 Netlify 页面源站请求 `/api/v1/image-tasks` 返回业务层未登录响应 `{ code: 1, msg: "未登录或权限不足" }`，说明方案三相关接口没有被 CORS 预检拦住。
+- Netlify 生产页面右上角 GitHub 链接已验证指向 `https://github.com/2086316487/infinite-canvas`。
 - Render 环境变量页能看到 `DATABASE_DSN`、`STORAGE_DRIVER`、`CORS_ALLOWED_ORIGINS`、`PUBLIC_BASE_URL` 等关键变量名；值隐藏，暂未记录明文。仍需在不泄露密钥的前提下确认 `DATABASE_DSN` 指向 Supabase Postgres 且 `STORAGE_DRIVER=postgres`。
 - 需要清理一次误测创建的临时用户：`codex_test_20260626043020`。
 - 前端和文档里容易误导到上游的展示链接已对齐 fork，例如应用 GitHub 按钮、版本检查地址、文档站 GitHub 配置和在线体验链接；生产页面是否生效以包含该改动的 Netlify/文档部署是否发布为准。
