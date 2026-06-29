@@ -192,15 +192,16 @@ data/generated-image-task-recovery/
 ## 当前已知状态
 
 - Render API 最新已手动部署到 `dfe821a`，Dashboard 显示 Deploy `dep-d8v58n8js32c738moq00` 为 Live；部署日志确认 checkout fork `2086316487/infinite-canvas` 的 `main` 分支提交 `dfe821aec074c7a12a4c57e5baea695dcd3f849b`。
-- Netlify 前端方案三代码已自动发布到 `main@1a7e0fa`，状态为 Published；后续 `dfe821a` 只改 Render API 的成功结果写库和图片结果解析，不含前端代码变更。
+- Netlify 前端已发布到 `main@6108fc6`，包含方案三前端轮询逻辑和生产渠道 fallback 修复；`dfe821a` 仍是当前 Render API 成功结果写库和图片结果解析修复提交。
 - Netlify 正式域名为 `https://infinite-canvas-2086316487.netlify.app`，部署源确认为 `2086316487/infinite-canvas` 的 `main` 分支。
 - 从 Netlify 页面源站直接请求 Render API 已验证通过：`/api/health`、`/api/settings` 返回 `200`。
 - 从 Netlify 页面源站请求 `/api/v1/image-tasks` 返回业务层未登录响应 `{ code: 1, msg: "未登录或权限不足" }`，说明方案三相关接口没有被 CORS 预检拦住。
 - 从 Netlify 页面源站 POST `/api/v1/image-tasks/generations` 在未登录态返回业务层未登录响应 `{ code: 1, msg: "未登录或权限不足" }`，未触发真实生成。
 - 从 Netlify 页面源站 OPTIONS `/api/v1/image-tasks/generations` 返回 `204`，`Access-Control-Allow-Origin` 正确放行 `https://infinite-canvas-2086316487.netlify.app`。
 - 登录态下已查询生产排查任务 `imgtask-42e9e52d-e346-480a-b65a-2f743e09de9e`：该任务已进入 `failed` 终态，`attempts=32`、`maxAttempts=3`、`refunded=true`，复查后不会继续增加 attempts。
-- 真实测试任务 `imgtask-dcbb0eab-a6d9-40af-9398-97a989c69c92` 证明上游约 30 秒成功返回，Render 日志已出现结果 URL；失败点是 `outputs` 用 map 更新时未走 GORM JSON serializer，Postgres 报 `could not determine data type of parameter $6`。`dfe821a` 已修复为结构体更新并优先保存上游 http(s) URL；由于部署重启后旧容器 recovery 文件不可用，该测试任务最终由新调度器收敛为 `failed` 且 `refunded=true`，需要在 `dfe821a` 之后另起新任务验证成功写回。
-- 生产页面登录态核对时发现当前浏览器本地配置仍可能保存为 `channelMode=local` 且没有 API Key，这会让前端验收误走本地直连而不是 Render；后续前端已改为默认云端渠道，并在本地直连缺少 API Key 时自动使用云端 effective config。该改动需要发布 Netlify 后再验证。
+- 真实测试任务 `imgtask-dcbb0eab-a6d9-40af-9398-97a989c69c92` 证明上游约 30 秒成功返回，Render 日志已出现结果 URL；失败点是 `outputs` 用 map 更新时未走 GORM JSON serializer，Postgres 报 `could not determine data type of parameter $6`。`dfe821a` 已修复为结构体更新并优先保存上游 http(s) URL；由于部署重启后旧容器 recovery 文件不可用，该测试任务最终由新调度器收敛为 `failed` 且 `refunded=true`。
+- 新真实测试任务 `imgtask-66f87e73-a45e-455d-b4ad-2a7b1ae206b6` 已在生产链路成功完成：Netlify 生图工作台创建任务，Render 1 次尝试成功，任务返回 1 个远程图片 URL、无 base64，前端历史和详情页均能展示结果图。
+- 生产页面登录态核对时发现当前浏览器本地配置仍可能保存为 `channelMode=local` 且没有 API Key，这会让前端验收误走本地直连而不是 Render；前端已改为默认云端渠道，并在本地直连缺少 API Key 时自动使用云端 effective config。Netlify 发布到 `main@6108fc6` 后已验证旧配置会自动回到 `remote`。
 - 生产排查任务 `imgtask-15d2ffef-caae-42e0-afb1-ee69958a2205` 在部署 `5c2cbf8` 后已由长期 `running` 进入 `failed` 终态，错误为 `AI request timed out`，接口已返回 `attempts` 和 `maxAttempts` 进度字段。
 - 生产排查任务 `imgtask-42e9e52d-e346-480a-b65a-2f743e09de9e` 对应中转站记录已在 30 秒左右成功并扣费，但系统侧长期 `running` 且 attempts 超过 3，判断不是单纯超时窗口问题。后续修复重点是：上游成功后的 http(s) 结果 URL 不再由 Render 二次下载；任务执行结果必须正确带回 outputs；超出 `maxAttempts` 的旧任务若已有 recovery 清单则优先恢复成功结果，否则由调度器收敛为失败并返还积分。
 - Netlify 生产站已验证首页、登录页、生图工作台和画布库可打开；画布库本地新建画布能写入浏览器本地列表。
@@ -215,6 +216,7 @@ data/generated-image-task-recovery/
 - 可以先测健康检查、公开配置、登录态、任务列表和参数校验。
 - 如果前端显示“图片生成超时”，先用任务 ID 查询 `/api/v1/image-tasks/:id`；若后端仍是 `running` 且 `updatedAt` 持续刷新，说明是前端本地等待窗口先到，不代表后端任务已经失败。
 - 如果中转站显示已成功扣费但任务仍长期 `running`，不要先继续拉长超时时间；优先查 Render 日志中是否已经完成上游响应解析、是否卡在结果 URL 下载/转存、任务 `attempts` 是否超过 `maxAttempts`。
+- 生图工作台前端请求使用 axios，做无扣费 dry-run 时不要只 monkeypatch `window.fetch`；需要同时拦截 axios/XHR，避免误发真实任务。
 - 根路径 404 不是后端失败；Render Go API 看 `/api/health`。
 - CORS 预检失败通常说明 Render 没放行 Netlify 域名。
 - 如果日志里出现 `github.com/basketikun/infinite-canvas/...`，这通常是 Go module/import path，不等于部署源是上游仓库；部署源要看 Render 绑定仓库和 checkout commit。
